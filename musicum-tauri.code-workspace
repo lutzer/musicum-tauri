@@ -1,0 +1,25 @@
+{
+  "folders": [
+    {
+      "path": ".",
+      "name": "root"
+    },
+    {
+      "path": "libs/audio-plugins",
+      "name": "audio-plugins"
+    },
+    {
+      "path": "libs/audio-plugin-sdk",
+      "name": "audio-plugin-sdk"
+    },
+    {
+      "path": "libs/structural-processors",
+      "name": "structural-processors"
+    },
+    {
+      "path": "libs/structural-processor-sdk",
+      "name": "structural-processor-sdk"
+    },
+  ],
+  "settings": {}
+}
