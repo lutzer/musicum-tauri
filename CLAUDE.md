@@ -20,7 +20,7 @@ libs/structural-processors/
 - Rust + Tauri 2 (desktop shell, IPC, events)
 - SvelteKit 5 + TypeScript (frontend, `apps/frontend/`)
 - SeaORM 1 + SQLite (no migration system — see Gotchas)
-- cpal 0.15 (audio output), symphonia 0.5 (decoding), rtrb 0.3 (lock-free ring buffer)
+- cpal 0.17 (audio output), symphonia 0.5 (decoding), rtrb 0.3 (lock-free ring buffer)
 - ffmpeg (system binary, MP3 encoding only)
 
 ## Dev commands
@@ -45,3 +45,6 @@ libs/structural-processors/
 Full architecture detail, DB schema, sidecar formats, audio engine design, and
 implementation order:
 - `docs/plans/specs/2026-05-22-tauri-greenfield-setup.md`
+
+## Important Guidelines
+- After any code changes always lint and test
