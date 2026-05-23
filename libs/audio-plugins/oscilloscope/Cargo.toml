@@ -1,0 +1,19 @@
+[package]
+name = "oscilloscope"
+version = "0.1.0"
+edition = "2021"
+description = "Oscilloscope visualizer plugin for Musicum"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "oscilloscope-descriptor"
+path = "src/main.rs"
+
+[[bin]]
+name = "ap-oscilloscope"
+path = "src/ap_main.rs"
+
+[dependencies]
+audio-plugin-sdk = { path = "../../audio-plugin-sdk" }

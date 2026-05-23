@@ -1,0 +1,29 @@
+{
+    "name": "structural-processors",
+    "$schema": "../../../../node_modules/nx/schemas/project-schema.json",
+    "projectType": "library",
+    "sourceRoot": "libs/structural-processors",
+    "targets": {
+        "build": {
+            "executor": "nx:run-commands",
+            "options": {
+                "command": "bash build.sh",
+                "cwd": "libs/structural-processors"
+            }
+        },
+        "test": {
+            "executor": "nx:run-commands",
+            "options": {
+                "command": "bash test.sh",
+                "cwd": "libs/structural-processors"
+            }
+        },
+        "lint": {
+            "executor": "nx:run-commands",
+            "options": {
+                "command": "cargo clippy -- -D warnings",
+                "cwd": "libs/structural-processors"
+            }
+        }
+    }
+}

@@ -1,0 +1,14 @@
+{
+    "name": "@musicum/structural-processor-sdk",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "main": "./src/index.ts",
+    "scripts": {
+        "test": "vitest run"
+    },
+    "devDependencies": {
+        "vitest": "*",
+        "happy-dom": "*"
+    }
+}

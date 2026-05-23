@@ -1,0 +1,20 @@
+[package]
+name = "normalize"
+version = "1.0.0"
+edition = "2021"
+description = "Normalize audio plugin for Musicum"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "normalize-descriptor"
+path = "src/main.rs"
+
+[[bin]]
+name = "ap-normalize"
+path = "src/ap_main.rs"
+
+[dependencies]
+audio-plugin-sdk = { path = "../../audio-plugin-sdk" }
+serde_json = "1.0.149"
