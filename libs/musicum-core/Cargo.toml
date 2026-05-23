@@ -14,6 +14,9 @@ anyhow.workspace     = true
 tracing.workspace    = true
 chrono.workspace     = true
 
+sha2        = "0.10"
+hex         = "0.4"
+
 symphonia   = { version = "0.5", features = ["all"] }
 cpal        = "0.17"
 rtrb        = "0.3"
