@@ -1,7 +1,7 @@
 # Musicum Tauri — Greenfield Setup Spec
 
 **Date:** 2026-05-22
-**Status:** Draft
+**Status:** Reviewed
 **Purpose:** Bootstrap guide for a new repo. Only the audio plugin crates and structural processor crates are carried over from the old repo. Everything else is written from scratch.
 
 ---
@@ -63,15 +63,27 @@ musicum-tauri/
 │   │   │           └── routes/
 │   │   └── package.json        # frontend dev server integration for Tauri
 │   │
-│   └── frontend/               # SvelteKit 5 app (written fresh)
-│       ├── package.json
-│       ├── svelte.config.js
-│       ├── vite.config.ts
+│   ├── frontend/               # SvelteKit 5 app (written fresh)
+│   │   ├── package.json
+│   │   ├── svelte.config.js
+│   │   ├── vite.config.ts
+│   │   └── src/
+│   │       ├── app.html
+│   │       ├── routes/
+│   │       ├── lib/
+│   │       └── ...
+│   │
+│   └── cli/                    # Standalone Rust CLI (musicum binary)
+│       ├── Cargo.toml
 │       └── src/
-│           ├── app.html
-│           ├── routes/
-│           ├── lib/
-│           └── ...
+│           ├── main.rs
+│           └── commands/
+│               ├── mod.rs
+│               ├── sync.rs
+│               ├── files.rs
+│               ├── clips.rs
+│               ├── collections.rs
+│               └── presets.rs
 │
 └── libs/
     ├── musicum-core/           # NEW: all business logic (written fresh)
@@ -100,6 +112,7 @@ musicum-tauri/
 resolver = "2"
 members = [
     "apps/desktop/src-tauri",
+    "apps/cli",
     "libs/musicum-core",
     "libs/audio-plugin-sdk",
     "libs/audio-plugins/gain",
@@ -109,7 +122,7 @@ members = [
     "libs/audio-plugins/oscilloscope",
     "libs/audio-plugins/level-meter",
     "libs/structural-processor-sdk",
-    "libs/structural-processors",
+    "libs/structural-processors",   # single crate (unlike audio-plugins which are individual crates)
 ]
 
 [workspace.dependencies]
@@ -405,12 +418,13 @@ Lives next to the source audio file.
   synths/
     pad.wav
     pad.musicum.json
-  collections/
-    ep-01.musicum.json
-  presets/
-    lo-fi.musicum-preset.json
-  attachments/
-    550e8400-e29b-41d4-a716-446655440000.jpg
+  .musicum/
+    collections/
+      ep-01.musicum.json
+    presets/
+      lo-fi.musicum-preset.json
+    attachments/
+      550e8400-e29b-41d4-a716-446655440000.jpg
 
 <generated_dir>/                      # default: <library_dir>/.generated/
   waveforms/
@@ -478,6 +492,8 @@ pub struct AppSettings {
     pub http_server_port: u16,
 }
 ```
+
+`AppSettings` is persisted as JSON at `{tauri_app_config_dir}/settings.json` (resolved via `tauri::api::path::app_config_dir`). On startup, `main.rs` reads and deserializes this file (defaulting to `AppSettings::default()` if absent). Any `settings::set_*` command writes the full struct back to the same file after mutating the in-memory value.
 
 ### `main.rs` skeleton
 
@@ -680,7 +696,94 @@ export const playback = { get position() { return position }, get state() { retu
 
 ### Plugin descriptor loading (`lib/stores/plugin-registry.svelte.ts`)
 
-Plugin WASM is not used for audio processing, but descriptor JSON (parameter names, ranges, defaults) is still needed to render the processor UI. Descriptors are bundled as static JSON files in the frontend build (copied from plugin crates at build time) or fetched via a Tauri command that reads them from the plugin crate binaries at startup.
+Plugin WASM is not used for audio processing, but descriptor JSON (parameter names, ranges, defaults) is still needed to render the processor UI. Descriptors are bundled as static JSON files under `apps/frontend/src/lib/plugin-descriptors/` (one file per plugin, e.g. `reverb.json`). These are hand-authored alongside the plugin crates and imported statically at build time — no Tauri command or WASM loading required at runtime.
+
+---
+
+## CLI (`apps/cli`)
+
+A standalone `musicum` binary that links `musicum-core` directly. Works without the desktop app running. SQLite WAL mode (enabled by `musicum-core`'s `connect()`) allows safe concurrent access if the desktop app is open at the same time.
+
+### `Cargo.toml`
+
+```toml
+[package]
+name = "musicum-cli"
+version = "0.1.0"
+edition = "2021"
+default-run = "musicum"
+
+[[bin]]
+name = "musicum"
+path = "src/main.rs"
+
+[dependencies]
+musicum-core = { path = "../../libs/musicum-core" }
+clap         = { version = "4", features = ["derive"] }
+tokio.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+```
+
+### Command surface
+
+```
+musicum sync                          # walk library dir, update DB + sidecars
+musicum files list                    # list all files (table output)
+musicum files show <slug>             # show file detail + clips
+musicum clips list <file-slug>        # list clips for a file
+musicum clips create <file-slug> --title "Name"
+musicum clips cache <clip-slug>       # run caching pipeline (requires ffmpeg)
+musicum collections list
+musicum collections show <slug>
+musicum presets list
+musicum presets apply <preset-slug> <clip-slug>
+```
+
+### `main.rs` skeleton
+
+```rust
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "musicum", about = "Musicum audio library CLI")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Sync,
+    Files(commands::files::FilesArgs),
+    Clips(commands::clips::ClipsArgs),
+    Collections(commands::collections::CollectionsArgs),
+    Presets(commands::presets::PresetsArgs),
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    let settings = load_settings()?;   // reads same settings.json as desktop app
+    let db = musicum_core::db::connect(&settings.library_dir).await?;
+
+    match cli.command {
+        Commands::Sync => commands::sync::run(&db, &settings).await?,
+        Commands::Files(args) => commands::files::run(&db, args).await?,
+        Commands::Clips(args) => commands::clips::run(&db, args).await?,
+        Commands::Collections(args) => commands::collections::run(&db, args).await?,
+        Commands::Presets(args) => commands::presets::run(&db, args).await?,
+    }
+    Ok(())
+}
+```
+
+`load_settings()` reads the same `settings.json` from the Tauri app config dir (`{home}/.config/com.musicum.app/settings.json` on Linux/Mac) so the CLI and desktop app share one config.
+
+### Output format
+
+- Default: human-readable table (via simple `println!` / `format!`)
+- `--json` flag on all list/show commands: pretty-printed JSON (useful for scripting)
 
 ---
 
@@ -692,6 +795,8 @@ Plugin WASM is not used for audio processing, but descriptor JSON (parameter nam
 pub struct PlaybackEngine {
     stream: Option<cpal::Stream>,
     command_tx: rtrb::Producer<PlaybackCommand>,
+    /// Shared with the audio callback; callback writes, main thread reads.
+    position_secs: Arc<AtomicU64>,  // bits reinterpreted as f64 via f64::from_bits
 }
 
 pub enum PlaybackCommand {
@@ -705,12 +810,14 @@ pub enum PlaybackCommand {
 pub enum PlaybackState { Playing, Paused, Stopped }
 ```
 
-Audio callback (cpal thread):
-1. Receive any pending `PlaybackCommand` from `command_tx` ring buffer (lock-free, no allocation)
+Audio callback (cpal thread — must be lock-free, no allocation):
+1. Drain any pending `PlaybackCommand` from `command_rx` (the `rtrb::Consumer` end, moved into the closure at stream creation)
 2. Read next buffer from `StructuralChain` (handles trim/cut/slice as virtual cursor)
 3. Pass buffer through `PluginChain::process_buffer()` (calls each `AudioPlugin::process()`)
 4. Write to cpal output buffer
-5. Send position update back to main thread
+5. Store updated position via `position_secs.store(f64::to_bits(pos), Ordering::Relaxed)`
+
+The main thread polls `position_secs` on a timer (e.g., every 50 ms via `tokio::time::interval`) and emits `playback:position` events to the frontend. Using `AtomicU64` avoids any lock or channel on the hot path.
 
 ### `cache.rs` — caching pipeline
 
@@ -771,7 +878,7 @@ cargo tauri build   # produces platform-specific installer in target/release/bun
     "beforeDevCommand": "cd apps/frontend && npm run dev",
     "beforeBuildCommand": "cd apps/frontend && npm run build",
     "devUrl": "http://localhost:5173",
-    "frontendDist": "../frontend/build"
+    "frontendDist": "../../frontend/build"
   },
   "app": {
     "windows": [{ "title": "Musicum", "width": 1280, "height": 800 }]
@@ -822,4 +929,5 @@ Suggested order to get to a working app incrementally:
 8. **Clip editor UI** — `ProcessorRack`, `ProcessorItem`, `PlaybackBar`, playback store
 9. **Caching pipeline** — `cache.rs`, waveform generation, `Waveform.svelte`
 10. **Collections + Presets** — service + commands + UI
-11. **HTTP adapter** — Axum routes (thin wrappers over same services)
+11. **CLI** — `apps/cli`, clap commands wrapping the same services, `--json` flag
+12. **HTTP adapter** — Axum routes (thin wrappers over same services)
