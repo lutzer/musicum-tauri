@@ -5,6 +5,14 @@
       "name": "root"
     },
     {
+      "path": "apps/cli",
+      "name": "cli"
+    },
+    {
+      "path": "libs/musicum-core",
+      "name": "musicum-core"
+    },
+    {
       "path": "libs/audio-plugins",
       "name": "audio-plugins"
     },
