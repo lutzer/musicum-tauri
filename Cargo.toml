@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "libs/musicum-core",
+    "libs/audio-plugin-sdk",
+    "libs/audio-plugins/gain",
+    "libs/audio-plugins/reverb",
+    "libs/audio-plugins/pan",
+    "libs/audio-plugins/normalize",
+    "libs/audio-plugins/oscilloscope",
+    "libs/audio-plugins/level-meter",
+    "libs/structural-processor-sdk",
+    "libs/structural-processors",
+]
+
+[workspace.dependencies]
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+uuid        = { version = "1", features = ["v4", "serde"] }
+tokio       = { version = "1", features = ["full"] }
+sea-orm     = { version = "1", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros"] }
+thiserror   = "1"
+anyhow      = "1"
+tracing     = "0.1"
+chrono      = { version = "0.4", features = ["serde"] }

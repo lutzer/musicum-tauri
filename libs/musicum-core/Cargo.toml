@@ -1,0 +1,36 @@
+[package]
+name = "musicum-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde.workspace      = true
+serde_json.workspace = true
+uuid.workspace       = true
+tokio.workspace      = true
+sea-orm.workspace    = true
+thiserror.workspace  = true
+anyhow.workspace     = true
+tracing.workspace    = true
+chrono.workspace     = true
+
+symphonia   = { version = "0.5", features = ["all"] }
+cpal        = "0.17"
+rtrb        = "0.3"
+slug        = "0.1"
+walkdir     = "2"
+
+audio-plugin-sdk         = { path = "../audio-plugin-sdk" }
+plugin-gain              = { path = "../audio-plugins/gain",        package = "gain" }
+plugin-reverb            = { path = "../audio-plugins/reverb",      package = "reverb" }
+plugin-pan               = { path = "../audio-plugins/pan",         package = "pan" }
+plugin-normalize         = { path = "../audio-plugins/normalize",   package = "normalize" }
+plugin-level-meter       = { path = "../audio-plugins/level-meter", package = "level-meter" }
+plugin-oscilloscope      = { path = "../audio-plugins/oscilloscope",package = "oscilloscope" }
+structural-processor-sdk = { path = "../structural-processor-sdk" }
+structural-processors    = { path = "../structural-processors" }
+
+[dev-dependencies]
+hound       = "3"
+tempfile    = "3"
+tokio       = { version = "1", features = ["full"] }
