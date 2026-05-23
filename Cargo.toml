@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "apps/cli",
     "libs/musicum-core",
     "libs/audio-plugin-sdk",
     "libs/audio-plugins/gain",

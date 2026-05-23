@@ -1,0 +1,18 @@
+[package]
+name = "musicum-cli"
+version = "0.1.0"
+edition = "2021"
+default-run = "musicum"
+
+[[bin]]
+name = "musicum"
+path = "src/main.rs"
+
+[dependencies]
+musicum-core = { path = "../../libs/musicum-core" }
+clap         = { version = "4", features = ["derive"] }
+sea-orm.workspace = true
+tokio.workspace   = true
+serde_json.workspace = true
+anyhow.workspace = true
+serde.workspace  = true
