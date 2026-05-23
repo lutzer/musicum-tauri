@@ -1,2 +1,7 @@
 node_modules
 .DS_Store
+
+.nx/installation
+.nx/cache
+.nx/workspace-data
+.nx/self-healing
