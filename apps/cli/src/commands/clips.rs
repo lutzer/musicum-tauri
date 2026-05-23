@@ -73,28 +73,28 @@ pub async fn run(db: &DatabaseConnection, args: ClipsArgs) -> Result<()> {
         }
         ClipsCommand::Show { slug, json } => {
             let clip = clip_service::get_clip_by_slug(db, &slug).await?;
+            let file = file_service::get_file_by_id(db, &clip.file_id).await?;
 
             if json {
-                print_json(&clip);
+                print_json(&serde_json::json!({ "clip": clip, "file": file }));
             } else {
                 let processors: serde_json::Value =
                     serde_json::from_str(&clip.processors).unwrap_or(serde_json::json!([]));
                 print_detail(vec![
                     ("slug", clip.slug.clone()),
                     ("title", clip.title.clone()),
-                    ("file_id", clip.file_id.clone()),
                     ("cached", clip.cached.clone()),
-                    (
-                        "cached_path",
-                        clip.cached_path.clone().unwrap_or_else(|| "-".into()),
-                    ),
-                    (
-                        "duration",
-                        clip.duration
-                            .map_or("-".into(), |d| format!("{d:.3}s")),
-                    ),
+                    ("cached_path", clip.cached_path.clone().unwrap_or_else(|| "-".into())),
+                    ("duration", clip.duration.map_or("-".into(), |d| format!("{d:.3}s"))),
                     ("processors", serde_json::to_string_pretty(&processors).unwrap()),
                     ("notes", if clip.notes.is_empty() { "-".into() } else { clip.notes.clone() }),
+                    ("", "".into()),
+                    ("file", file.slug.clone()),
+                    ("file:path", file.path.clone()),
+                    ("file:duration", format!("{:.3}s", file.duration)),
+                    ("file:sample_rate", format!("{}Hz", file.sample_rate)),
+                    ("file:channels", file.channels.to_string()),
+                    ("file:mime", file.mime_type.clone()),
                 ]);
             }
         }

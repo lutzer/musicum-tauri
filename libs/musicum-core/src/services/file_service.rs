@@ -10,6 +10,16 @@ pub async fn list_files(db: &DatabaseConnection) -> Result<Vec<file::Model>, Ser
         .await?)
 }
 
+pub async fn get_file_by_id(
+    db: &DatabaseConnection,
+    id: &str,
+) -> Result<file::Model, ServiceError> {
+    file::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ServiceError::NotFound(format!("file '{id}'")))
+}
+
 pub async fn get_file_by_slug(
     db: &DatabaseConnection,
     slug: &str,
