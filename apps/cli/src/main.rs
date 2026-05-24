@@ -32,6 +32,17 @@ enum Commands {
     Collections(commands::collections::CollectionsArgs),
     /// Preset operations
     Presets(commands::presets::PresetsArgs),
+    /// Play a file or clip (slug or file path)
+    Play {
+        /// Slug or file path to play
+        target: String,
+        /// Resolve target as a file slug (skips clip lookup)
+        #[arg(long, conflicts_with = "clip")]
+        file: bool,
+        /// Resolve target as a clip slug (skips file lookup)
+        #[arg(long, conflicts_with = "file")]
+        clip: bool,
+    },
     /// Print the path to the settings file
     Config,
 }
@@ -65,6 +76,7 @@ async fn main() -> Result<()> {
         Commands::Clips(args) => commands::clips::run(&db, args).await?,
         Commands::Collections(args) => commands::collections::run(&db, args).await?,
         Commands::Presets(args) => commands::presets::run(&db, args).await?,
+        Commands::Play { target, file, clip } => commands::play::run(&db, target, file, clip).await?,
         Commands::Config => unreachable!(),
     }
 
