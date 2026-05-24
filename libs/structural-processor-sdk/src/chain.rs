@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use crate::{Params, ProcessorDescriptor, ProcessorEntry};
+use crate::{Params, ProcessorDescriptor, StructuralProcessorEntry};
 
 #[derive(Deserialize, Default)]
 pub struct Edit {
@@ -13,7 +13,7 @@ pub struct Edit {
 }
 
 pub fn apply_chain(
-    registry: &[ProcessorEntry],
+    registry: &[StructuralProcessorEntry],
     samples: &[f32],
     sample_rate: u32,
     channels: u16,
@@ -31,20 +31,20 @@ pub fn apply_chain(
     current
 }
 
-pub fn descriptors_json(registry: &[ProcessorEntry]) -> String {
+pub fn descriptors_json(registry: &[StructuralProcessorEntry]) -> String {
     let descriptors: Vec<&ProcessorDescriptor> =
         registry.iter().map(|e| (e.descriptor)()).collect();
     serde_json::to_string(&descriptors).expect("descriptor serialisation failed")
 }
 
-pub fn validate_edit(registry: &[ProcessorEntry], edit_type: &str, params: &Params) -> bool {
+pub fn validate_edit(registry: &[StructuralProcessorEntry], edit_type: &str, params: &Params) -> bool {
     find(registry, edit_type).is_some_and(|e| (e.validate)(params))
 }
 
 /// Map `t` forward through the edit chain.
 /// `duration` is the raw audio length in seconds.
 pub fn map_time_forward(
-    registry: &[ProcessorEntry],
+    registry: &[StructuralProcessorEntry],
     edits: &[Edit],
     t: f64,
     duration: f64,
@@ -66,7 +66,7 @@ pub fn map_time_forward(
 /// Map `t` backward through the edit chain.
 /// `duration` is the raw audio length in seconds.
 pub fn map_time_back(
-    registry: &[ProcessorEntry],
+    registry: &[StructuralProcessorEntry],
     edits: &[Edit],
     t: f64,
     duration: f64,
@@ -98,14 +98,14 @@ pub fn map_time_back(
     current_t
 }
 
-fn find<'a>(registry: &'a [ProcessorEntry], edit_type: &str) -> Option<&'a ProcessorEntry> {
+fn find<'a>(registry: &'a [StructuralProcessorEntry], edit_type: &str) -> Option<&'a StructuralProcessorEntry> {
     registry.iter().find(|e| (e.descriptor)().id == edit_type)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ParameterDescriptor, ProcessorDescriptor, ProcessorEntry, StructuralProcessor};
+    use crate::{ParameterDescriptor, ProcessorDescriptor, StructuralProcessor, StructuralProcessorEntry};
     use std::collections::HashMap;
 
     // ── Minimal test processors (no real audio logic needed here) ─────────────
@@ -142,10 +142,10 @@ mod tests {
         fn map_time_back(t: f64, _: f64, _: &Params) -> f64 { t }
     }
 
-    fn reg() -> Vec<ProcessorEntry> {
+    fn reg() -> Vec<StructuralProcessorEntry> {
         vec![
-            ProcessorEntry::of::<PassProcessor>(),
-            ProcessorEntry::of::<HalfProcessor>(),
+            StructuralProcessorEntry::of::<PassProcessor>(),
+            StructuralProcessorEntry::of::<HalfProcessor>(),
         ]
     }
 

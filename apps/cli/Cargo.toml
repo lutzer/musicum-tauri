@@ -9,11 +9,15 @@ name = "musicum"
 path = "src/main.rs"
 
 [dependencies]
-musicum-core = { path = "../../libs/musicum-core" }
-clap         = { version = "4", features = ["derive"] }
-sea-orm.workspace = true
-tokio.workspace   = true
-serde_json.workspace = true
-anyhow.workspace = true
-serde.workspace  = true
-crossterm        = "0.28"
+musicum-core             = { path = "../../libs/musicum-core" }
+structural-processors    = { path = "../../libs/structural-processors" }
+structural-processor-sdk = { path = "../../libs/structural-processor-sdk" }
+clap                     = { version = "4", features = ["derive"] }
+sea-orm.workspace        = true
+tokio.workspace          = true
+serde_json.workspace     = true
+anyhow.workspace         = true
+serde.workspace          = true
+uuid.workspace           = true
+crossterm                = "0.28"
+slug                     = "0.1"

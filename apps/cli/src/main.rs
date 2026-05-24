@@ -32,6 +32,8 @@ enum Commands {
     Collections(commands::collections::CollectionsArgs),
     /// Preset operations
     Presets(commands::presets::PresetsArgs),
+    /// List registered structural processors
+    Processors(commands::processors::ProcessorsArgs),
     /// Play a file or clip (slug or file path)
     Play {
         /// Slug or file path to play
@@ -69,13 +71,15 @@ async fn main() -> Result<()> {
     }
 
     let db = musicum_core::db::connect(&app_settings.library_dir).await?;
+    let library_dir = app_settings.library_dir.as_str();
 
     match cli.command {
-        Commands::Sync => commands::sync::run(&db, &app_settings).await?,
-        Commands::Files(args) => commands::files::run(&db, args).await?,
-        Commands::Clips(args) => commands::clips::run(&db, args).await?,
+        Commands::Sync              => commands::sync::run(&db, &app_settings).await?,
+        Commands::Files(args)       => commands::files::run(&db, args).await?,
+        Commands::Clips(args)       => commands::clips::run(&db, args).await?,
         Commands::Collections(args) => commands::collections::run(&db, args).await?,
-        Commands::Presets(args) => commands::presets::run(&db, args).await?,
+        Commands::Presets(args)     => commands::presets::run(&db, library_dir, args).await?,
+        Commands::Processors(args)  => commands::processors::run(args),
         Commands::Play { target, file, clip } => commands::play::run(&db, target, file, clip).await?,
         Commands::Config => unreachable!(),
     }

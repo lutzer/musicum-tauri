@@ -177,11 +177,13 @@ async fn sync_preset_sidecar() {
         slug: "lo-fi".into(),
         title: "Lo-Fi".into(),
         description: "lo-fi preset".into(),
-        processors: vec![sidecar::ProcessorEntry {
-            kind: "plugin".into(),
+        processors: vec![sidecar::ProcessorEntry::AudioPlugin {
             id: "gain".into(),
             enabled: true,
-            params: serde_json::json!({ "gain": 0.5 }),
+            processor: sidecar::ProcessorRef {
+                id: "gain".into(),
+                params: serde_json::json!({ "gain": 0.5 }),
+            },
         }],
     };
     sidecar::write_preset_sidecar(dir.path(), &preset_sc).unwrap();

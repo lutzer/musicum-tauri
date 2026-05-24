@@ -1333,7 +1333,11 @@ dependencies = [
  "sea-orm",
  "serde",
  "serde_json",
+ "slug",
+ "structural-processor-sdk",
+ "structural-processors",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

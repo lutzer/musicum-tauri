@@ -2,23 +2,9 @@ mod processors;
 
 use std::io::{self, Read};
 
-use processors::{
-    crop::CropProcessor, cut::CutProcessor, slice::SliceProcessor, trim::TrimProcessor,
-};
-use structural_processor_sdk::{
-    chain::{apply_chain, descriptors_json, Edit},
-    ProcessorEntry,
-};
+use structural_processors::registry;
+use structural_processor_sdk::chain::{apply_chain, descriptors_json, Edit};
 use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
-
-fn registry() -> Vec<ProcessorEntry> {
-    vec![
-        ProcessorEntry::of::<TrimProcessor>(),
-        ProcessorEntry::of::<CutProcessor>(),
-        ProcessorEntry::of::<SliceProcessor>(),
-        ProcessorEntry::of::<CropProcessor>(),
-    ]
-}
 
 fn read_wav(path: &str) -> (Vec<f32>, u32, u16) {
     let mut reader = WavReader::open(path).expect("failed to open input WAV");

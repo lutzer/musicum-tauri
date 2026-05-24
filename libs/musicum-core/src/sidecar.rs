@@ -6,12 +6,25 @@ use crate::ServiceError;
 // ── Processor entry (shared by clips and presets) ─────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ProcessorEntry {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub id: String,
-    pub enabled: bool,
+pub struct ProcessorRef {
+    pub id:     String,
     pub params: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum ProcessorEntry {
+    Structural {
+        id:        String,
+        enabled:   bool,
+        processor: ProcessorRef,
+    },
+    #[serde(rename = "audio-plugin")]
+    AudioPlugin {
+        id:        String,
+        enabled:   bool,
+        processor: ProcessorRef,
+    },
 }
 
 // ── Audio-file sidecar ────────────────────────────────────────────────────
@@ -168,6 +181,18 @@ pub fn read_preset_sidecars(library_dir: &Path) -> Result<Vec<PresetSidecar>, Se
         }
     }
     Ok(result)
+}
+
+pub fn read_preset_sidecar(library_dir: &Path, slug: &str) -> Result<PresetSidecar, ServiceError> {
+    let path = library_dir
+        .join(".musicum")
+        .join("presets")
+        .join(format!("{slug}.musicum-preset.json"));
+    if !path.exists() {
+        return Err(ServiceError::NotFound(format!("preset '{slug}'")));
+    }
+    let text = std::fs::read_to_string(&path)?;
+    Ok(serde_json::from_str(&text)?)
 }
 
 pub fn write_preset_sidecar(library_dir: &Path, sc: &PresetSidecar) -> Result<(), ServiceError> {

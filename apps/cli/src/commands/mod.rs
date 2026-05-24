@@ -3,4 +3,5 @@ pub mod collections;
 pub mod files;
 pub mod play;
 pub mod presets;
+pub mod processors;
 pub mod sync;

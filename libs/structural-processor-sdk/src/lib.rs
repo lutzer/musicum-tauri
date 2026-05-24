@@ -5,7 +5,7 @@ pub use chain::Edit;
 pub use processor::{ParameterDescriptor, Params, ProcessorDescriptor, StructuralProcessor};
 
 /// Vtable entry for one processor. Holds plain function pointers — no heap, no trait objects.
-pub struct ProcessorEntry {
+pub struct StructuralProcessorEntry {
     pub descriptor:       fn() -> &'static ProcessorDescriptor,
     pub validate:         fn(&Params) -> bool,
     pub apply:            fn(&[f32], u32, u16, &Params) -> Vec<f32>,
@@ -14,7 +14,7 @@ pub struct ProcessorEntry {
     pub map_time_back:    fn(f64, f64, &Params) -> f64,
 }
 
-impl ProcessorEntry {
+impl StructuralProcessorEntry {
     pub fn of<P: StructuralProcessor>() -> Self {
         Self {
             descriptor:       P::descriptor,
@@ -43,12 +43,12 @@ impl ProcessorEntry {
 #[macro_export]
 macro_rules! implement_sp_chain {
     ($($proc:ty),+ $(,)?) => {
-        static __SP_REGISTRY_CELL: std::sync::OnceLock<Vec<$crate::ProcessorEntry>> =
+        static __SP_REGISTRY_CELL: std::sync::OnceLock<Vec<$crate::StructuralProcessorEntry>> =
             std::sync::OnceLock::new();
 
-        fn __sp_registry() -> &'static [$crate::ProcessorEntry] {
+        fn __sp_registry() -> &'static [$crate::StructuralProcessorEntry] {
             __SP_REGISTRY_CELL.get_or_init(|| {
-                vec![$($crate::ProcessorEntry::of::<$proc>()),+]
+                vec![$($crate::StructuralProcessorEntry::of::<$proc>()),+]
             })
         }
 
