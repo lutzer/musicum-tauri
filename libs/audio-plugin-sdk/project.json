@@ -7,16 +7,6 @@
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "commands": [
-          "nx run audio-plugin-sdk:test-rs",
-          "nx run audio-plugin-sdk:test-js"
-        ],
-        "parallel": false
-      }
-    },
-    "test-rs": {
-      "executor": "nx:run-commands",
-      "options": {
         "command": "cargo test",
         "cwd": "libs/audio-plugin-sdk"
       }
@@ -24,32 +14,8 @@
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "commands": [
-          "nx run audio-plugin-sdk:lint-rs",
-          "nx run audio-plugin-sdk:lint-js"
-        ],
-        "parallel": false
-      }
-    },
-    "lint-rs": {
-      "executor": "nx:run-commands",
-      "options": {
         "command": "cargo clippy -- -D warnings",
         "cwd": "libs/audio-plugin-sdk"
-      }
-    },
-    "lint-js": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "npm run lint",
-        "cwd": "libs/audio-plugin-sdk/js"
-      }
-    },
-    "test-js": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "npm test",
-        "cwd": "libs/audio-plugin-sdk/js"
       }
     }
   }

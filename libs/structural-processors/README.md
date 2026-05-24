@@ -31,45 +31,6 @@ src/
     crop.rs
 ```
 
-## Building
-
-Run `build.sh` from this directory:
-
-```bash
-./build.sh
-```
-
-The script performs three steps:
-
-1. **Compile the native binary**
-
-   ```bash
-   cargo build --release --bin structural-processor
-   ```
-
-2. **Generate the descriptor JSON** (processor metadata consumed by the frontend)
-
-   ```bash
-   ./target/release/structural-processor --descriptors \
-     > ../../apps/frontend/static/structural-processor-descriptors.json
-   ```
-
-3. **Compile to WASM** and copy to the frontend static folder
-
-   ```bash
-   cargo build --target wasm32-unknown-unknown --release --lib
-   cp target/wasm32-unknown-unknown/release/structural_processors.wasm \
-      ../../apps/frontend/static/structural-processor.wasm
-   ```
-
-The frontend requires both output files to be present:
-
-```
-apps/frontend/static/
-  structural-processor.wasm
-  structural-processor-descriptors.json
-```
-
 ## Native CLI Binary
 
 ```bash

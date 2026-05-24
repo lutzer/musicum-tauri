@@ -111,9 +111,6 @@ implement_sp_chain!(TrimProcessor, CutProcessor, SliceProcessor, CropProcessor);
 | `__sp_map_time_forward(editsPtr, editsLen, t, duration) -> f64` | Forward time mapping |
 | `__sp_map_time_back(editsPtr, editsLen, t, duration) -> f64` | Backward time mapping |
 
-## JS SDK
-
-The companion TypeScript package lives in `js/` — see [`js/README.md`](js/README.md).
 
 ## Adding a New Processor
 
