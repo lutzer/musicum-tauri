@@ -11,9 +11,5 @@ crate-type = ["cdylib", "rlib"]
 name = "reverb-descriptor"
 path = "src/main.rs"
 
-[[bin]]
-name = "ap-reverb"
-path = "src/ap_main.rs"
-
 [dependencies]
 audio-plugin-sdk = { path = "../../audio-plugin-sdk" }

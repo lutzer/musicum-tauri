@@ -1,5 +1,4 @@
 mod analyzer;
-mod binary;
 mod parameters;
 mod plugin;
 

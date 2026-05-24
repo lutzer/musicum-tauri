@@ -118,7 +118,7 @@ Decodes any Symphonia-supported format to an interleaved `f32` buffer. Used by `
 
 **Construction** (`StructuralChain::new(samples, sample_rate, channels, entries)`):
 1. Filters `entries` to enabled `"structural"` items in array order.
-2. Converts each entry's `processor.params` to the `HashMap<String, f64>` format the SDK expects.
+2. Converts each entry's `processor.params` to the `HashMap<String, f64>` format the SDK expects by iterating the JSON object's fields and coercing each value to `f64` (non-numeric values are skipped).
 3. Calls `structural_processor_sdk::chain::apply_chain` → produces a new `Vec<f32>`.
 4. Stores result and initialises frame cursor at 0.
 

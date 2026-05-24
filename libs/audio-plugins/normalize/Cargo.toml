@@ -11,10 +11,6 @@ crate-type = ["cdylib", "rlib"]
 name = "normalize-descriptor"
 path = "src/main.rs"
 
-[[bin]]
-name = "ap-normalize"
-path = "src/ap_main.rs"
-
 [dependencies]
 audio-plugin-sdk = { path = "../../audio-plugin-sdk" }
 serde_json = "1.0.149"
