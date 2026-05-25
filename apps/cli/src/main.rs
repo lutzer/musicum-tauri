@@ -44,6 +44,9 @@ enum Commands {
         /// Resolve target as a clip slug (skips file lookup)
         #[arg(long, conflicts_with = "file")]
         clip: bool,
+        /// Start playback with looping enabled
+        #[arg(long = "loop")]
+        loop_mode: bool,
     },
     /// Print the path to the settings file
     Config,
@@ -77,7 +80,7 @@ async fn main() -> Result<()> {
         Commands::Collections(args) => commands::collections::run(&db, args).await?,
         Commands::Presets(args)     => commands::presets::run(&db, library_dir, args).await?,
         Commands::Processors(args)  => commands::processors::run(args),
-        Commands::Play { target, file, clip } => commands::play::run(&db, target, file, clip).await?,
+        Commands::Play { target, file, clip, loop_mode } => commands::play::run(&db, target, file, clip, loop_mode).await?,
         Commands::Config => unreachable!(),
     }
 

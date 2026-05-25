@@ -200,3 +200,82 @@ async fn sync_preset_sidecar() {
     assert_eq!(presets.len(), 1);
     assert_eq!(presets[0].slug, "lo-fi");
 }
+
+#[tokio::test]
+async fn sync_picks_up_updated_preset_sidecar() {
+    let dir = tempdir().unwrap();
+
+    let mut preset_sc = sidecar::PresetSidecar {
+        version: 1,
+        slug: "reverb-hall".into(),
+        title: "Hall Reverb".into(),
+        description: "".into(),
+        processors: vec![],
+    };
+    sidecar::write_preset_sidecar(dir.path(), &preset_sc).unwrap();
+
+    let db = setup(dir.path()).await;
+    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    // Update the sidecar on disk — add a processor
+    preset_sc.processors.push(sidecar::ProcessorEntry::AudioPlugin {
+        id: "rev-1".into(),
+        enabled: true,
+        processor: sidecar::ProcessorRef {
+            id: "reverb".into(),
+            params: serde_json::json!({ "mix": 0.4 }),
+        },
+    });
+    sidecar::write_preset_sidecar(dir.path(), &preset_sc).unwrap();
+
+    // Second sync should pick up the change
+    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    let presets = musicum_core::db::entities::preset::Entity::find()
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(presets.len(), 1);
+    let stored: Vec<sidecar::ProcessorEntry> =
+        serde_json::from_str(&presets[0].processors).unwrap();
+    assert_eq!(stored.len(), 1, "processor added in sidecar should appear in DB after sync");
+}
+
+#[tokio::test]
+async fn sync_picks_up_sidecar_metadata_when_audio_unchanged() {
+    let dir = tempdir().unwrap();
+    let wav = dir.path().join("bass.wav");
+    common::write_sine_wav(&wav, 1.0);
+
+    let db = setup(dir.path()).await;
+    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    // Update the sidecar with new metadata (audio file untouched)
+    let sidecar_path = sidecar::sidecar_path_for_audio(&wav);
+    let mut sc = sidecar::read_file_sidecar(&wav).unwrap();
+    sc.metadata.bpm = Some(140.0);
+    sc.metadata.key = Some("Am".into());
+    std::fs::write(&sidecar_path, serde_json::to_string_pretty(&sc).unwrap()).unwrap();
+
+    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    let files = musicum_core::db::entities::file::Entity::find()
+        .all(&db)
+        .await
+        .unwrap();
+    let meta = musicum_core::db::entities::file_metadata::Entity::find_by_id(&files[0].id)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(meta.bpm, Some(140.0), "BPM should be updated from sidecar even when audio is unchanged");
+    assert_eq!(meta.key.as_deref(), Some("Am"));
+}

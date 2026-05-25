@@ -24,6 +24,7 @@ const CHUNK_SAMPLES: usize = 4_096;
 
 struct PlaybackState {
     paused:       AtomicBool,
+    looping:      AtomicBool,
     finished:     AtomicBool,
     seek_request: Mutex<Option<f64>>,
     position:     AtomicU64, // frames output so far
@@ -63,6 +64,7 @@ impl PlaybackEngine {
 
         let state = Arc::new(PlaybackState {
             paused:       AtomicBool::new(true),
+            looping:      AtomicBool::new(false),
             finished:     AtomicBool::new(false),
             seek_request: Mutex::new(None),
             position:     AtomicU64::new(0),
@@ -126,7 +128,12 @@ impl PlaybackEngine {
         if frames == 0 { return 0.0; }
         frames as f64 / self.state.sample_rate as f64
     }
+    pub fn toggle_loop(&self) {
+        let was = self.state.looping.load(Ordering::Relaxed);
+        self.state.looping.store(!was, Ordering::Relaxed);
+    }
     pub fn is_paused(&self)   -> bool { self.state.paused.load(Ordering::Relaxed) }
+    pub fn is_looping(&self)  -> bool { self.state.looping.load(Ordering::Relaxed) }
     pub fn is_finished(&self) -> bool { self.state.finished.load(Ordering::Relaxed) }
     pub fn title(&self)       -> &str { &self.title }
 }
@@ -177,8 +184,24 @@ fn decode_loop(path: PathBuf, edits: Vec<Edit>, state: Arc<PlaybackState>) {
         }
 
         if cursor_secs >= total_secs {
-            state.finished.store(true, Ordering::Relaxed);
-            break;
+            // Drain remaining buffered audio so the full clip is heard before reset.
+            while state.buffer.lock().map(|b| b.len()).unwrap_or(1) > 0 {
+                thread::sleep(Duration::from_millis(5));
+            }
+            state.position.store(0, Ordering::Relaxed);
+            if !state.looping.load(Ordering::Relaxed) {
+                state.paused.store(true, Ordering::Relaxed);
+            }
+            chain = match build_fresh_chain(&path, &edits) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("decode rebuild error: {e}");
+                    state.finished.store(true, Ordering::Relaxed);
+                    return;
+                }
+            };
+            cursor_secs = 0.0;
+            continue;
         }
 
         if state.buffer.lock().map(|b| b.len()).unwrap_or(0) >= BUFFER_CAPACITY {
@@ -188,8 +211,23 @@ fn decode_loop(path: PathBuf, edits: Vec<Edit>, state: Arc<PlaybackState>) {
 
         let samples = chain.read_at(cursor_secs, CHUNK_SAMPLES);
         if samples.is_empty() {
-            state.finished.store(true, Ordering::Relaxed);
-            break;
+            while state.buffer.lock().map(|b| b.len()).unwrap_or(1) > 0 {
+                thread::sleep(Duration::from_millis(5));
+            }
+            state.position.store(0, Ordering::Relaxed);
+            if !state.looping.load(Ordering::Relaxed) {
+                state.paused.store(true, Ordering::Relaxed);
+            }
+            chain = match build_fresh_chain(&path, &edits) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("decode rebuild error: {e}");
+                    state.finished.store(true, Ordering::Relaxed);
+                    return;
+                }
+            };
+            cursor_secs = 0.0;
+            continue;
         }
 
         cursor_secs += samples.len() as f64 / (sample_rate as f64 * ch as f64);

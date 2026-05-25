@@ -191,7 +191,7 @@ async fn upsert_file(
 
     let file_id = if let Some(existing_model) = existing {
         if existing_model.hash == hash {
-            // File unchanged — still sync clips from sidecar
+            upsert_file_metadata(db, &existing_model.id, &sc.metadata).await?;
             upsert_clips(db, &existing_model.id, &sc.clips).await?;
             return Ok(());
         }
