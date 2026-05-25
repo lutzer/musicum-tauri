@@ -124,6 +124,19 @@ pub async fn set_processor_param(
     update_preset_processors(db, library_dir, preset_slug, sc.processors).await
 }
 
+pub async fn update_preset_processors_full(
+    db: &DatabaseConnection,
+    library_dir: &str,
+    slug: &str,
+    processors: Vec<sidecar::ProcessorEntry>,
+) -> Result<(), ServiceError> {
+    let lib = Path::new(library_dir);
+    let mut sc = sidecar::read_preset_sidecar(lib, slug)?;
+    sc.processors = processors.clone();
+    sidecar::write_preset_sidecar(lib, &sc)?;
+    update_preset_processors(db, library_dir, slug, processors).await
+}
+
 pub async fn update_preset_processors(
     db: &DatabaseConnection,
     _library_dir: &str,

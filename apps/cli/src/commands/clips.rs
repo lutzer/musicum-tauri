@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::output::{DetailItem::{Field, Section}, print_detail, print_json, print_result, print_section_header, print_table};
+use super::processor_list_editor::{run as run_editor, SaveFn};
 
 #[derive(Debug, Args)]
 pub struct ClipsArgs {
@@ -41,6 +42,10 @@ pub enum ClipsCommand {
     /// Remove all processors from a clip
     ClearProcessors {
         clip_slug: String,
+    },
+    /// Interactively edit processor chain for a clip
+    Edit {
+        slug: String,
     },
 }
 
@@ -186,6 +191,23 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: ClipsArgs) ->
             print_result("Cleared processors", &[
                 Field("clip", clip_slug.clone()),
             ]);
+        }
+
+        ClipsCommand::Edit { slug } => {
+            let clip = clip_service::get_clip_by_slug(db, &slug).await?;
+            let processors = serde_json::from_str(&clip.processors).unwrap_or_default();
+            let title = format!("Clip: {slug}");
+
+            let save: SaveFn<'_> = Box::new(|procs| {
+                let slug = slug.clone();
+                Box::pin(async move {
+                    clip_service::update_clip_processors(db, library_dir, &slug, procs)
+                        .await
+                        .map_err(anyhow::Error::from)
+                })
+            });
+
+            run_editor(&title, processors, save).await?;
         }
     }
     Ok(())
