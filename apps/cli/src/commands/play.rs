@@ -3,8 +3,7 @@ use std::{io, path::PathBuf, time::Duration};
 use anyhow::{anyhow, Result};
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
 use musicum_core::{
     audio::PlaybackEngine,
@@ -13,9 +12,10 @@ use musicum_core::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Layout},
-    style::{Color, Style},
-    widgets::{Block, Borders, Gauge, Paragraph},
-    Frame, Terminal,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Gauge, Paragraph},
+    Frame, Terminal, TerminalOptions, Viewport,
 };
 use sea_orm::DatabaseConnection;
 
@@ -61,12 +61,15 @@ async fn resolve_path(
     Err(anyhow!("'{target}' is not a known slug or an existing file path"))
 }
 
+const PLAYER_HEIGHT: u16 = 3;
+
 fn run_player(engine: PlaybackEngine) -> Result<()> {
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let backend = CrosstermBackend::new(io::stdout());
+    let mut terminal = Terminal::with_options(
+        backend,
+        TerminalOptions { viewport: Viewport::Inline(PLAYER_HEIGHT) },
+    )?;
 
     loop {
         terminal.draw(|f| draw(f, &engine))?;
@@ -91,7 +94,8 @@ fn run_player(engine: PlaybackEngine) -> Result<()> {
     }
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    // Move cursor past the inline widget so the shell prompt appears below it
+    terminal.clear()?;
     Ok(())
 }
 
@@ -100,48 +104,41 @@ fn draw(f: &mut Frame, engine: &PlaybackEngine) {
     let dur = engine.duration_secs();
     let paused = engine.is_paused();
 
-    let [_, center, _] = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(7),
-        Constraint::Fill(1),
+    let [header_area, gauge_area, hints_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
     ])
     .areas(f.area());
 
-    let title = format!(" {} ", engine.title());
-    let block = Block::default().borders(Borders::ALL).title(title);
-    let inner = block.inner(center);
-    f.render_widget(block, center);
-
-    let [gauge_area, status_area, _, hints_area] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .areas(inner);
-
-    let ratio = if dur > 0.0 { (pos / dur).clamp(0.0, 1.0) } else { 0.0 };
-    let gauge = Gauge::default()
-        .gauge_style(Style::default().fg(Color::Cyan))
-        .ratio(ratio)
-        .label(format!("{} / {}", fmt_duration(pos), fmt_duration(dur)));
-    f.render_widget(gauge, gauge_area);
-
+    // Title (left) + status (right) on one line
     let (status_text, status_color) = if paused {
         ("⏸  Paused", Color::Yellow)
     } else {
         ("▶  Playing", Color::Green)
     };
+    let header = Line::from(vec![
+        Span::styled(
+            engine.title(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(status_text, Style::default().fg(status_color)),
+    ]);
+    f.render_widget(Paragraph::new(header), header_area);
+
+    let ratio = if dur > 0.0 { (pos / dur).clamp(0.0, 1.0) } else { 0.0 };
     f.render_widget(
-        Paragraph::new(status_text)
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(status_color)),
-        status_area,
+        Gauge::default()
+            .gauge_style(Style::default().fg(Color::Cyan))
+            .ratio(ratio)
+            .label(format!("{} / {}", fmt_duration(pos), fmt_duration(dur))),
+        gauge_area,
     );
 
     f.render_widget(
         Paragraph::new("[p] pause  [←/→] seek 5s  [q] quit")
-            .alignment(Alignment::Center)
+            .alignment(Alignment::Left)
             .style(Style::default().fg(Color::DarkGray)),
         hints_area,
     );
