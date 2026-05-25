@@ -34,13 +34,14 @@ libs/structural-processors/
   Breaking schema changes require bumping `SCHEMA_VERSION` in `libs/musicum-core/src/db/schema.rs`,
   which drops and recreates all tables in dev. Never add a migration system without discussion.
 - **Sidecars are source of truth.** The SQLite DB is a queryable index rebuilt from
-  `.musicum.json` sidecars via `sync_library`. Don't treat the DB as canonical. Whenever adding changes to a sidecar, always propagate them to the library if possible. syncing should be only if new files are copied in or old ones are removed
+  `.musicum.json` sidecars via `sync_library`. Don't treat the DB as canonical. Whenever adding changes to a sidecar, always propagate them to the library if possible. syncing should be only if new files are copied in or old ones are removed.
 - **ffmpeg is a system dependency.** Must be installed on the host for clip caching
   (`cache_clip` command). Pure-Rust audio I/O everywhere else.
 - **Audio plugin crates need dual crate-type.** Each plugin/processor `Cargo.toml` must
   have `crate-type = ["cdylib", "rlib"]` — `cdylib` for WASM, `rlib` for native linkage
   in `musicum-core`. Adding a new plugin crate without this will break the native build.
 - **Logic goes in musicum-core** try to keep all the logic and models in the core library. cli and frontend just display, the tauri interafce just wraps the musicum-core library
+- **CLI outputs** reuse output functions, so the output has a similar layout and style for all operations
 
 ## Supplemental docs
 Full architecture detail, DB schema, sidecar formats, audio engine design, and

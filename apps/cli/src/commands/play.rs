@@ -20,7 +20,7 @@ use sea_orm::DatabaseConnection;
 
 pub async fn run(db: &DatabaseConnection, target: String, force_file: bool, force_clip: bool) -> Result<()> {
     let path = resolve_path(db, &target, force_file, force_clip).await?;
-    let engine = PlaybackEngine::new(&path)?;
+    let engine = PlaybackEngine::new(&path, &[])?;
     engine.play();
     run_tui(engine)
 }
@@ -59,7 +59,7 @@ async fn resolve_path(
     if path.exists() {
         return Ok(path);
     }
-    Err(anyhow!("'{}' is not a known slug or an existing file path", target))
+    Err(anyhow!("'{target}' is not a known slug or an existing file path"))
 }
 
 struct RawModeGuard;

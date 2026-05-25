@@ -5,3 +5,4 @@
 * [ ] Display all items as rows or cards
 * [ ] Allow selection of multiple files, collections and clips to do batch operations
 * [ ] Sync key to add potential new files from the source directory
+* [ ] Sync presets collections, everything

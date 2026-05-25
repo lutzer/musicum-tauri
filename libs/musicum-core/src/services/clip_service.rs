@@ -4,7 +4,7 @@ use uuid::Uuid;
 use std::path::Path;
 
 use crate::db::entities::clip;
-use crate::sidecar::{self, ClipSidecar};
+use crate::sidecar::{self, ClipSidecar, ProcessorEntry};
 use crate::services::file_service;
 use crate::ServiceError;
 
@@ -81,4 +81,44 @@ pub async fn create_clip(
     .await?;
 
     Ok(model)
+}
+
+pub async fn update_clip_processors(
+    db: &DatabaseConnection,
+    _library_dir: &str,
+    clip_slug: &str,
+    processors: Vec<ProcessorEntry>,
+) -> Result<(), ServiceError> {
+    let clip = get_clip_by_slug(db, clip_slug).await?;
+    let file = file_service::get_file_by_id(db, &clip.file_id).await?;
+    let audio_path = Path::new(&file.path);
+
+    let mut sc = sidecar::read_file_sidecar(audio_path)?;
+    let entry = sc
+        .clips
+        .iter_mut()
+        .find(|c| c.slug == clip_slug)
+        .ok_or_else(|| ServiceError::NotFound(format!("clip '{clip_slug}' in sidecar")))?;
+    entry.processors = processors.clone();
+    sidecar::write_file_sidecar(audio_path, &sc)?;
+
+    let processors_json = serde_json::to_string(&processors)?;
+    let now = chrono::Utc::now().to_rfc3339();
+    clip::ActiveModel {
+        id:          Set(clip.id),
+        slug:        Set(clip.slug),
+        file_id:     Set(clip.file_id),
+        title:       Set(clip.title),
+        processors:  Set(processors_json),
+        cached:      Set(clip.cached),
+        cached_path: Set(clip.cached_path),
+        duration:    Set(clip.duration),
+        notes:       Set(clip.notes),
+        created_at:  Set(clip.created_at),
+        updated_at:  Set(now),
+    }
+    .update(db)
+    .await?;
+
+    Ok(())
 }

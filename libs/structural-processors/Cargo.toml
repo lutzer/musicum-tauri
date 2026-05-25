@@ -5,7 +5,7 @@ edition = "2021"
 description = "Musicum structural processor implementations (WASM + native binary)"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [[bin]]
 name = "structural-processor"

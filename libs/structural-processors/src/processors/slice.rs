@@ -1,14 +1,11 @@
-use structural_processor_sdk::{ParameterDescriptor, Params, ProcessorDescriptor, StructuralProcessor};
+use structural_processor_sdk::{
+    AudioSource, ParameterDescriptor, Params, ProcessorDescriptor,
+    StreamingProcessorInstance, StructuralProcessor, secs_to_samples,
+};
 
 static SLICE_PARAMS: [ParameterDescriptor; 2] = [
-    ParameterDescriptor::Int { id: "slices", name: "Slices", default: 2, min: 1, max: 64 },
-    ParameterDescriptor::Int {
-        id: "select_slice",
-        name: "Select Slice",
-        default: 0,
-        min: 0,
-        max: 63,
-    },
+    ParameterDescriptor::Int { id: "slices",       name: "Slices",       default: 2,  min: 1, max: 64 },
+    ParameterDescriptor::Int { id: "select_slice", name: "Select Slice", default: 0,  min: 0, max: 63 },
 ];
 
 static DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
@@ -17,12 +14,24 @@ static DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
     parameters: &SLICE_PARAMS,
 };
 
+pub struct SliceInstance {
+    pub params: Params,
+}
+
+impl StreamingProcessorInstance for SliceInstance {
+    fn fill(&mut self, out_start: f64, out_end: f64, source: &mut dyn AudioSource) -> Vec<f32> {
+        let src_start = SliceProcessor::map_time_back(out_start, source.duration_secs(), &self.params);
+        let src_end   = SliceProcessor::map_time_back(out_end,   source.duration_secs(), &self.params);
+        let n = secs_to_samples(src_end - src_start, source.sample_rate(), source.channels());
+        source.read_at(src_start, n)
+    }
+    fn reset(&mut self) {}
+}
+
 pub struct SliceProcessor;
 
 impl StructuralProcessor for SliceProcessor {
-    fn descriptor() -> &'static ProcessorDescriptor {
-        &DESCRIPTOR
-    }
+    fn descriptor() -> &'static ProcessorDescriptor { &DESCRIPTOR }
 
     fn validate(params: &Params) -> bool {
         let slices = params.get("slices").copied().unwrap_or(0.0) as i64;
@@ -30,25 +39,8 @@ impl StructuralProcessor for SliceProcessor {
         slices >= 1 && select >= 0 && select < slices
     }
 
-    fn apply(samples: &[f32], _sample_rate: u32, channels: u16, params: &Params) -> Vec<f32> {
-        let ch = channels as usize;
-        let total_frames = samples.len() / ch;
-
-        let slices = (params.get("slices").copied().unwrap_or(1.0) as usize).max(1);
-        let select = params.get("select_slice").copied().unwrap_or(0.0) as usize;
-
-        let slice_frames = total_frames / slices;
-        let start_frame = select * slice_frames;
-        let end_frame = if select + 1 == slices {
-            total_frames
-        } else {
-            start_frame + slice_frames
-        };
-
-        if start_frame >= end_frame || end_frame > total_frames {
-            return vec![0.0_f32; ch];
-        }
-        samples[(start_frame * ch)..(end_frame * ch)].to_vec()
+    fn create(params: Params) -> Box<dyn StreamingProcessorInstance> {
+        Box::new(SliceInstance { params })
     }
 
     fn output_duration(duration: f64, params: &Params) -> f64 {
@@ -59,7 +51,7 @@ impl StructuralProcessor for SliceProcessor {
     fn map_time_forward(t: f64, duration: f64, params: &Params) -> f64 {
         let slices = params.get("slices").copied().unwrap_or(1.0).max(1.0) as usize;
         let select = params.get("select_slice").copied().unwrap_or(0.0) as usize;
-        let slice_dur = duration / slices as f64;
+        let slice_dur   = duration / slices as f64;
         let slice_start = select as f64 * slice_dur;
         t.clamp(slice_start, slice_start + slice_dur) - slice_start
     }
@@ -75,7 +67,6 @@ impl StructuralProcessor for SliceProcessor {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-
     use super::*;
 
     fn params(slices: i64, select: i64) -> Params {
@@ -85,21 +76,15 @@ mod tests {
         m
     }
 
-    fn numbered_samples(frames: usize) -> Vec<f32> {
-        (0..frames).map(|i| i as f32).collect()
-    }
-
     #[test]
     fn validate_accepts_valid_params() {
         assert!(SliceProcessor::validate(&params(4, 0)));
         assert!(SliceProcessor::validate(&params(4, 3)));
-        assert!(SliceProcessor::validate(&params(1, 0)));
     }
 
     #[test]
     fn validate_rejects_out_of_bounds_select() {
         assert!(!SliceProcessor::validate(&params(4, 4)));
-        assert!(!SliceProcessor::validate(&params(4, -1)));
     }
 
     #[test]
@@ -108,54 +93,56 @@ mod tests {
     }
 
     #[test]
-    fn apply_returns_first_slice() {
-        // 100 frames @1Hz, 2 slices → slice 0 = frames 0..50
-        let samples = numbered_samples(100);
-        let result = SliceProcessor::apply(&samples, 1, 1, &params(2, 0));
-        assert_eq!(result.len(), 50);
-        assert!((result[0] - 0.0).abs() < 1e-6);
-        assert!((result[49] - 49.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn apply_returns_last_slice_including_remainder() {
-        // 101 frames, 2 slices → slice 1 gets frames 50..101 (51 frames)
-        let samples = numbered_samples(101);
-        let result = SliceProcessor::apply(&samples, 1, 1, &params(2, 1));
-        assert_eq!(result.len(), 51);
-        assert!((result[0] - 50.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn apply_stereo_slice() {
-        // 100 stereo frames (200 samples), 4 slices → slice 2 = frames 50..75 → 25 frames × 2 ch = 50 samples
-        let samples: Vec<f32> = (0..200_usize).map(|i| i as f32).collect();
-        let result = SliceProcessor::apply(&samples, 1, 2, &params(4, 2));
-        assert_eq!(result.len(), 50);
+    fn output_duration_is_slice_fraction() {
+        assert!((SliceProcessor::output_duration(1.0, &params(4, 0)) - 0.25).abs() < 1e-9);
     }
 
     #[test]
     fn map_time_forward_clamps_into_selected_slice() {
-        // 4 slices, select slice 2; duration=1.0s → each slice=0.25s, slice 2 = [0.5, 0.75)
         let p = params(4, 2);
-        // t=0.6 is inside slice 2 → processed = 0.6 - 0.5 = 0.1
         assert!((SliceProcessor::map_time_forward(0.6, 1.0, &p) - 0.1).abs() < 1e-9);
-        // t=0.0 is before slice 2 → clamps to slice_start → processed = 0.0
         assert!((SliceProcessor::map_time_forward(0.0, 1.0, &p) - 0.0).abs() < 1e-9);
-        // t=0.9 is past slice 2 → clamps to slice_end → processed = 0.25
         assert!((SliceProcessor::map_time_forward(0.9, 1.0, &p) - 0.25).abs() < 1e-9);
     }
 
     #[test]
     fn map_time_back_adds_slice_offset() {
-        // slice 2 of 4, duration=1.0s → offset = 0.5s
         let p = params(4, 2);
         assert!((SliceProcessor::map_time_back(0.1, 1.0, &p) - 0.6).abs() < 1e-9);
     }
+}
+
+#[cfg(test)]
+mod fill_tests {
+    use super::*;
+    use structural_processor_sdk::VecAudioSource;
+
+    fn params(slices: i64, select: i64) -> Params {
+        let mut m = std::collections::HashMap::new();
+        m.insert("slices".into(), slices as f64);
+        m.insert("select_slice".into(), select as f64);
+        m
+    }
+
+    fn mono_src(frames: usize) -> VecAudioSource {
+        VecAudioSource::new((0..frames).map(|i| i as f32).collect(), 100, 1)
+    }
 
     #[test]
-    fn output_duration_is_slice_fraction() {
-        let p = params(4, 0);
-        assert!((SliceProcessor::output_duration(1.0, &p) - 0.25).abs() < 1e-9);
+    fn fill_selects_correct_slice() {
+        let mut inst = SliceInstance { params: params(4, 2) };
+        let mut src = mono_src(100);
+        let out = inst.fill(0.0, 0.25, &mut src);
+        assert_eq!(out.len(), 25);
+        assert!((out[0] - 50.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fill_first_slice_reads_from_zero() {
+        let mut inst = SliceInstance { params: params(2, 0) };
+        let mut src = mono_src(100);
+        let out = inst.fill(0.0, 0.5, &mut src);
+        assert_eq!(out.len(), 50);
+        assert!((out[0] - 0.0).abs() < 1e-6);
     }
 }

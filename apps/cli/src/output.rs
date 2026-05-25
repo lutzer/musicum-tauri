@@ -1,40 +1,206 @@
+use crossterm::terminal;
 use serde::Serialize;
 
 pub fn print_json<T: Serialize>(value: &T) {
     println!("{}", serde_json::to_string_pretty(value).unwrap());
 }
 
-pub fn print_table(headers: (&str, &str), rows: Vec<(String, String)>) {
-    let col1_w = rows
+pub enum DetailItem<'a> {
+    Field(&'a str, String),
+    Section(&'a str),
+}
+
+pub fn print_table(headers: &[&str], rows: Vec<Vec<String>>) {
+    let term_w = terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
+    print!("{}", format_table(headers, &rows, term_w));
+}
+
+pub fn print_detail(items: &[DetailItem]) {
+    let key_w = items
         .iter()
-        .map(|(l, _)| l.len())
+        .filter_map(|i| if let DetailItem::Field(k, _) = i { Some(k.len()) } else { None })
         .max()
-        .unwrap_or(0)
-        .max(headers.0.len());
-
-    println!("{:<col1_w$}  {}", headers.0, headers.1);
-    println!("{}", "─".repeat(col1_w + 2 + headers.1.len().min(60)));
-    for (left, right) in rows {
-        println!("{left:<col1_w$}  {right}");
+        .unwrap_or(0);
+    for item in items {
+        match item {
+            DetailItem::Field(key, val) => println!("{key:>key_w$}: {val}"),
+            DetailItem::Section(title) => println!("\n{title}"),
+        }
     }
 }
 
-pub fn print_table_3col(
-    headers: (&str, &str, &str),
-    rows: Vec<(String, String, String)>,
-) {
-    let c1 = rows.iter().map(|(a, _, _)| a.len()).max().unwrap_or(0).max(headers.0.len());
-    let c2 = rows.iter().map(|(_, b, _)| b.len()).max().unwrap_or(0).max(headers.1.len());
-    println!("{:<c1$}  {:<c2$}  {}", headers.0, headers.1, headers.2);
-    println!("{}", "─".repeat(c1 + c2 + 4 + headers.2.len().min(60)));
-    for (a, b, c) in rows {
-        println!("{a:<c1$}  {b:<c2$}  {c}");
+pub fn print_result(action: &str, items: &[DetailItem]) {
+    println!("{action}");
+    if !items.is_empty() {
+        print_detail(items);
     }
 }
 
-pub fn print_detail(pairs: Vec<(&str, String)>) {
-    let key_w = pairs.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
-    for (key, val) in pairs {
-        println!("{key:>key_w$}: {val}");
+fn format_table(headers: &[&str], rows: &[Vec<String>], term_w: usize) -> String {
+    let ncols = headers.len();
+    if ncols == 0 {
+        return String::new();
+    }
+
+    // Base widths from content
+    let mut widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
+    for row in rows {
+        for (w, cell) in widths.iter_mut().zip(row.iter()) {
+            *w = (*w).max(cell.len());
+        }
+    }
+
+    let separators = (ncols - 1) * 2;
+    let total_base: usize = widths.iter().sum::<usize>() + separators;
+    if total_base <= term_w {
+        // Distribute remaining space equally among all columns
+        let extra = term_w - total_base;
+        let per_col = extra / ncols;
+        let leftover = extra % ncols;
+        for (i, w) in widths.iter_mut().enumerate() {
+            *w += per_col + if i < leftover { 1 } else { 0 };
+        }
+    } else {
+        // Content wider than terminal: cap last column to remaining space
+        let fixed: usize = widths[..ncols - 1].iter().sum::<usize>() + separators;
+        widths[ncols - 1] = term_w.saturating_sub(fixed).max(headers[ncols - 1].len());
+    }
+
+    let mut out = String::new();
+
+    let append_row = |out: &mut String, cells: &[&str]| {
+        for (i, (width, cell)) in widths.iter().zip(cells.iter()).enumerate() {
+            if i > 0 {
+                out.push_str("  ");
+            }
+            let w = *width;
+            let char_count = cell.chars().count();
+            if char_count <= w {
+                out.push_str(&format!("{cell:<w$}"));
+            } else {
+                let truncated: String = cell.chars().take(w.saturating_sub(1)).collect();
+                out.push_str(&truncated);
+                out.push('…');
+            }
+        }
+        out.push('\n');
+    };
+
+    append_row(&mut out, headers);
+
+    for _ in 0..term_w {
+        out.push('─');
+    }
+    out.push('\n');
+
+    for row in rows {
+        let cells: Vec<&str> = row.iter().map(|s| s.as_str()).collect();
+        append_row(&mut out, &cells);
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_table;
+
+    #[test]
+    fn separator_spans_full_width() {
+        let out = format_table(
+            &["SLUG", "TITLE"],
+            &[vec!["my-preset".into(), "My Preset".into()]],
+            40,
+        );
+        let sep = out.lines().nth(1).unwrap();
+        assert_eq!(sep.chars().count(), 40);
+    }
+
+    #[test]
+    fn two_col_basic_layout() {
+        let out = format_table(
+            &["SLUG", "TITLE"],
+            &[
+                vec!["my-preset".into(), "My Preset".into()],
+                vec!["another".into(), "Another One".into()],
+            ],
+            60,
+        );
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 4);
+        assert!(lines[0].starts_with("SLUG"));
+        assert!(lines[2].starts_with("my-preset"));
+        assert!(lines[3].starts_with("another  "));
+    }
+
+    #[test]
+    fn three_col_layout() {
+        let out = format_table(
+            &["ID", "NAME", "PARAMS"],
+            &[vec!["crop".into(), "Crop".into(), "start=0 (time)".into()]],
+            60,
+        );
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].contains("ID"));
+        assert!(lines[0].contains("NAME"));
+        assert!(lines[0].contains("PARAMS"));
+    }
+
+    #[test]
+    fn last_col_truncates_with_ellipsis() {
+        let long_val = "a".repeat(100);
+        let out = format_table(
+            &["ID", "VALUE"],
+            &[vec!["x".into(), long_val]],
+            20,
+        );
+        let row = out.lines().nth(2).unwrap();
+        assert!(row.contains('…'));
+        let last_cell_start = row.find("  ").unwrap() + 2;
+        let last_cell = &row[last_cell_start..];
+        assert!(last_cell.chars().count() <= 17);
+    }
+
+    #[test]
+    fn detail_key_width_computed_across_sections() {
+        use super::DetailItem::{Field, Section};
+        let items = vec![
+            Field("slug", "my-clip".into()),
+            Section("file"),
+            Field("path", "/music/x.flac".into()),
+        ];
+        let key_w = items
+            .iter()
+            .filter_map(|i| if let super::DetailItem::Field(k, _) = i { Some(k.len()) } else { None })
+            .max()
+            .unwrap_or(0);
+        assert_eq!(key_w, 4); // "slug" and "path" are both 4 chars
+    }
+
+    #[test]
+    fn last_col_fits_without_truncation() {
+        let out = format_table(
+            &["ID", "VALUE"],
+            &[vec!["x".into(), "short".into()]],
+            40,
+        );
+        let row = out.lines().nth(2).unwrap();
+        assert!(!row.contains('…'));
+        assert!(row.contains("short"));
+    }
+
+    #[test]
+    fn col_width_driven_by_widest_row() {
+        let out = format_table(
+            &["ID", "VALUE"],
+            &[
+                vec!["short".into(), "v1".into()],
+                vec!["much-longer-slug".into(), "v2".into()],
+            ],
+            60,
+        );
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(lines[2].starts_with("short            "));
     }
 }

@@ -1,24 +1,19 @@
 pub mod processors;
 
-pub fn registry() -> Vec<structural_processor_sdk::StructuralProcessorEntry> {
-    use processors::{
-        crop::CropProcessor, cut::CutProcessor,
-        slice::SliceProcessor, trim::TrimProcessor,
-    };
-    vec![
-        structural_processor_sdk::StructuralProcessorEntry::of::<TrimProcessor>(),
-        structural_processor_sdk::StructuralProcessorEntry::of::<CutProcessor>(),
-        structural_processor_sdk::StructuralProcessorEntry::of::<SliceProcessor>(),
-        structural_processor_sdk::StructuralProcessorEntry::of::<CropProcessor>(),
-    ]
-}
+use structural_processor_sdk::{ProcessorEntry, Registry};
+use processors::{
+    crop::CropProcessor, cut::CutProcessor,
+    slice::SliceProcessor, trim::TrimProcessor,
+};
 
-structural_processor_sdk::implement_sp_chain!(
-    processors::trim::TrimProcessor,
-    processors::cut::CutProcessor,
-    processors::slice::SliceProcessor,
-    processors::crop::CropProcessor,
-);
+pub fn registry() -> Registry {
+    let mut m = Registry::new();
+    m.insert("trim".to_string(),  ProcessorEntry::of::<TrimProcessor>());
+    m.insert("cut".to_string(),   ProcessorEntry::of::<CutProcessor>());
+    m.insert("slice".to_string(), ProcessorEntry::of::<SliceProcessor>());
+    m.insert("crop".to_string(),  ProcessorEntry::of::<CropProcessor>());
+    m
+}
 
 #[cfg(test)]
 mod tests {
@@ -26,61 +21,65 @@ mod tests {
     fn public_registry_has_four_entries() {
         let r = super::registry();
         assert_eq!(r.len(), 4);
-        let ids: Vec<&str> = r.iter().map(|e| (e.descriptor)().id).collect();
-        assert!(ids.contains(&"trim"));
-        assert!(ids.contains(&"cut"));
-        assert!(ids.contains(&"slice"));
-        assert!(ids.contains(&"crop"));
+        assert!(r.contains_key("trim"));
+        assert!(r.contains_key("cut"));
+        assert!(r.contains_key("slice"));
+        assert!(r.contains_key("crop"));
     }
+}
 
-    use std::collections::HashMap;
-
-    use structural_processor_sdk::chain::{
-        apply_chain, descriptors_json, map_time_back, map_time_forward, validate_edit, Edit,
+#[cfg(test)]
+mod integration_tests {
+    use structural_processor_sdk::{
+        build_chain, chain_output_duration, VecAudioSource, AudioSource,
+        map_time_forward, map_time_back, validate_edit,
+        chain::Edit,
     };
+    use std::collections::HashMap;
 
     fn edits(json: &str) -> Vec<Edit> {
         serde_json::from_str(json).unwrap()
     }
 
-    fn sine(frames: usize) -> Vec<f32> {
-        (0..frames).map(|i| i as f32 / frames as f32).collect()
+    fn mono_src(frames: usize) -> Box<dyn AudioSource> {
+        Box::new(VecAudioSource::new(
+            (0..frames).map(|i| i as f32).collect(),
+            100,
+            1,
+        ))
+    }
+
+    #[test]
+    fn chain_trim_then_read_correct_length() {
+        let es = edits(r#"[{"type":"trim","enabled":true,"parameters":{"start":0.2,"end":0.2}}]"#);
+        let mut chain = build_chain(mono_src(100), &es, &super::registry());
+        let out = chain.read_at(0.0, 60);
+        assert_eq!(out.len(), 60);
+        assert!((out[0] - 20.0).abs() < 1e-6);
     }
 
     #[test]
     fn chain_trim_then_cut() {
-        // 100-frame mono @100Hz; trim start=0.2, end=0.2 → keep [0.2, 0.8] = 60 frames; cut [0.1, 0.3] → 40 frames
-        let edit_json = r#"[
+        let es = edits(r#"[
             {"type":"trim","enabled":true,"parameters":{"start":0.2,"end":0.2}},
             {"type":"cut","enabled":true,"parameters":{"from":0.1,"to":0.3}}
-        ]"#;
-        let result = apply_chain(&super::registry(), &sine(100), 100, 1, &edits(edit_json));
-        assert_eq!(result.len(), 40);
+        ]"#);
+        let output_dur = chain_output_duration(1.0, &es, &super::registry());
+        assert!((output_dur - 0.4).abs() < 1e-9);
     }
 
     #[test]
     fn chain_skips_disabled_edits() {
-        let edit_json = r#"[
-            {"type":"trim","enabled":false,"parameters":{"start":0.5,"end":0.9}}
-        ]"#;
-        let result = apply_chain(&super::registry(), &sine(100), 100, 1, &edits(edit_json));
-        assert_eq!(result.len(), 100);
+        let es = edits(r#"[{"type":"trim","enabled":false,"parameters":{"start":0.5,"end":0.9}}]"#);
+        let chain = build_chain(mono_src(100), &es, &super::registry());
+        assert!((chain.duration_secs() - 1.0).abs() < 1e-9);
     }
 
     #[test]
     fn chain_unknown_type_is_passthrough() {
-        let edit_json = r#"[{"type":"wormhole","enabled":true,"parameters":{}}]"#;
-        let result = apply_chain(&super::registry(), &sine(50), 100, 1, &edits(edit_json));
-        assert_eq!(result.len(), 50);
-    }
-
-    #[test]
-    fn descriptors_json_contains_all_four() {
-        let json = descriptors_json(&super::registry());
-        assert!(json.contains("\"id\":\"trim\""));
-        assert!(json.contains("\"id\":\"cut\""));
-        assert!(json.contains("\"id\":\"slice\""));
-        assert!(json.contains("\"id\":\"crop\""));
+        let es = edits(r#"[{"type":"wormhole","enabled":true,"parameters":{}}]"#);
+        let chain = build_chain(mono_src(50), &es, &super::registry());
+        assert!((chain.duration_secs() - 0.5).abs() < 1e-9);
     }
 
     #[test]
@@ -98,19 +97,15 @@ mod tests {
 
     #[test]
     fn map_time_forward_trim_identity_at_zero() {
-        let edit_json =
-            r#"[{"type":"trim","enabled":true,"parameters":{"start":0.0,"end":0.0}}]"#;
-        // raw duration = 1.0s; no trimming → t=0.0 maps to 0.0
-        let result = map_time_forward(&super::registry(), &edits(edit_json), 0.0, 1.0);
+        let es = edits(r#"[{"type":"trim","enabled":true,"parameters":{"start":0.0,"end":0.0}}]"#);
+        let result = map_time_forward(&super::registry(), &es, 0.0, 1.0);
         assert!(result.abs() < 1e-9);
     }
 
     #[test]
     fn map_time_back_trim_adds_start() {
-        let edit_json =
-            r#"[{"type":"trim","enabled":true,"parameters":{"start":1.0,"end":2.0}}]"#;
-        // raw duration = 2.0s
-        let result = map_time_back(&super::registry(), &edits(edit_json), 0.5, 2.0);
+        let es = edits(r#"[{"type":"trim","enabled":true,"parameters":{"start":1.0,"end":2.0}}]"#);
+        let result = map_time_back(&super::registry(), &es, 0.5, 2.0);
         assert!((result - 1.5).abs() < 1e-9);
     }
 }

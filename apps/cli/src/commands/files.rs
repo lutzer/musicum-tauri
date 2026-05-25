@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 use musicum_core::services::{clip_service, file_service};
 use sea_orm::DatabaseConnection;
 
-use crate::output::{print_detail, print_json, print_table};
+use crate::output::{DetailItem::{self, Field, Section}, print_detail, print_json, print_table};
 
 #[derive(Debug, Args)]
 pub struct FilesArgs {
@@ -36,18 +36,13 @@ pub async fn run(db: &DatabaseConnection, args: FilesArgs) -> Result<()> {
                 println!("No files. Run `musicum sync` first.");
             } else {
                 print_table(
-                    ("SLUG", "NAME  [DURATION  RATE  CH]"),
+                    &["SLUG", "NAME  [DURATION  RATE  CH]"],
                     files
                         .iter()
-                        .map(|f| {
-                            (
-                                f.slug.clone(),
-                                format!(
-                                    "{}  [{:.1}s  {}Hz  {}ch]",
-                                    f.name, f.duration, f.sample_rate, f.channels
-                                ),
-                            )
-                        })
+                        .map(|f| vec![
+                            f.slug.clone(),
+                            format!("{}  [{:.1}s  {}Hz  {}ch]", f.name, f.duration, f.sample_rate, f.channels),
+                        ])
                         .collect(),
                 );
             }
@@ -66,37 +61,33 @@ pub async fn run(db: &DatabaseConnection, args: FilesArgs) -> Result<()> {
                 }
                 print_json(&FileDetail { file, metadata: meta, clips });
             } else {
-                print_detail(vec![
-                    ("slug", file.slug.clone()),
-                    ("name", file.name.clone()),
-                    ("path", file.path.clone()),
-                    ("duration", format!("{:.3}s", file.duration)),
-                    ("sample_rate", format!("{}Hz", file.sample_rate)),
-                    ("channels", file.channels.to_string()),
-                    ("mime_type", file.mime_type.clone()),
-                    ("hash", file.hash[..16].to_string() + "..."),
-                ]);
-
+                let mut items: Vec<DetailItem> = vec![
+                    Field("slug", file.slug.clone()),
+                    Field("name", file.name.clone()),
+                    Field("path", file.path.clone()),
+                    Field("duration", format!("{:.3}s", file.duration)),
+                    Field("sample_rate", format!("{}Hz", file.sample_rate)),
+                    Field("channels", file.channels.to_string()),
+                    Field("mime_type", file.mime_type.clone()),
+                    Field("hash", file.hash[..16].to_string() + "..."),
+                ];
                 if let Some(m) = &meta {
-                    println!();
-                    print_detail(vec![
-                        ("bpm", m.bpm.map_or("-".into(), |v| v.to_string())),
-                        ("key", m.key.clone().unwrap_or_else(|| "-".into())),
-                        ("rating", m.rating.map_or("-".into(), |v| v.to_string())),
-                        ("tags", if m.tags.is_empty() { "-".into() } else { m.tags.clone() }),
-                        ("notes", if m.notes.is_empty() { "-".into() } else { m.notes.clone() }),
-                    ]);
+                    items.push(Section("metadata"));
+                    items.push(Field("bpm", m.bpm.map_or("-".into(), |v| v.to_string())));
+                    items.push(Field("key", m.key.clone().unwrap_or_else(|| "-".into())));
+                    items.push(Field("rating", m.rating.map_or("-".into(), |v| v.to_string())));
+                    items.push(Field("tags", if m.tags.is_empty() { "-".into() } else { m.tags.clone() }));
+                    items.push(Field("notes", if m.notes.is_empty() { "-".into() } else { m.notes.clone() }));
                 }
+                print_detail(&items);
 
                 if !clips.is_empty() {
                     println!("\nClips:");
                     print_table(
-                        ("SLUG", "TITLE  [CACHED]"),
+                        &["SLUG", "TITLE  [CACHED]"],
                         clips
                             .iter()
-                            .map(|c| {
-                                (c.slug.clone(), format!("{}  [{}]", c.title, c.cached))
-                            })
+                            .map(|c| vec![c.slug.clone(), format!("{}  [{}]", c.title, c.cached)])
                             .collect(),
                     );
                 }

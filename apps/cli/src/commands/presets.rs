@@ -8,7 +8,7 @@ use structural_processor_sdk::processor::ParameterDescriptor;
 use uuid::Uuid;
 use std::path::Path;
 
-use crate::output::{print_detail, print_json, print_table};
+use crate::output::{DetailItem::Field, print_detail, print_json, print_result, print_table};
 
 #[derive(Debug, Args)]
 pub struct PresetsArgs {
@@ -44,6 +44,17 @@ pub enum PresetsCommand {
         preset_slug: String,
         instance_uuid: String,
     },
+    /// Interactively edit processor parameters with an arrow-key UI
+    Edit {
+        slug: String,
+    },
+    /// Set a single processor parameter by key/value
+    SetParam {
+        preset_slug: String,
+        instance_uuid: String,
+        key: String,
+        value: String,
+    },
 }
 
 pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) -> Result<()> {
@@ -56,8 +67,8 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) 
                 println!("No presets. Add a sidecar under .musicum/presets/ and run sync.");
             } else {
                 print_table(
-                    ("SLUG", "TITLE"),
-                    presets.iter().map(|p| (p.slug.clone(), p.title.clone())).collect(),
+                    &["SLUG", "TITLE"],
+                    presets.iter().map(|p| vec![p.slug.clone(), p.title.clone()]).collect(),
                 );
             }
         }
@@ -69,37 +80,32 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) 
             } else {
                 let processors: Vec<ProcessorEntry> =
                     serde_json::from_str(&preset.processors).unwrap_or_else(|_| vec![]);
-                print_detail(vec![
-                    ("slug", preset.slug.clone()),
-                    ("title", preset.title.clone()),
-                    ("description", if preset.description.is_empty() { "-".into() } else { preset.description.clone() }),
+                print_detail(&[
+                    Field("slug", preset.slug.clone()),
+                    Field("title", preset.title.clone()),
+                    Field("description", if preset.description.is_empty() { "-".into() } else { preset.description.clone() }),
                 ]);
                 if processors.is_empty() {
                     println!("\nprocessors: (none)");
                 } else {
                     println!("\nprocessors:");
-                    let uuid_w = 36;
-                    let kind_w = 12;
-                    let proc_w = 6;
-                    println!("  {:<uuid_w$}  {:<kind_w$}  {:<proc_w$}  ENABLED  PARAMS",
-                        "UUID", "KIND", "PROC");
-                    println!("  {}", "─".repeat(uuid_w + kind_w + proc_w + 30));
-                    for entry in &processors {
-                        let (id, kind, proc_id, enabled, params) = match entry {
-                            ProcessorEntry::Structural { id, enabled, processor } => (
-                                id.as_str(), "structural", processor.id.as_str(), *enabled,
-                                format_params(&processor.params),
-                            ),
-                            ProcessorEntry::AudioPlugin { id, enabled, processor } => (
-                                id.as_str(), "audio-plugin", processor.id.as_str(), *enabled,
-                                format_params(&processor.params),
-                            ),
-                        };
-                        println!(
-                            "  {:<uuid_w$}  {:<kind_w$}  {:<proc_w$}  {:<7}  {}",
-                            id, kind, proc_id, enabled, params
-                        );
-                    }
+                    print_table(
+                        &["UUID", "KIND", "PROC", "ENABLED", "PARAMS"],
+                        processors.iter().map(|entry| {
+                            let (id, kind, proc_id, enabled, params) = match entry {
+                                ProcessorEntry::Structural { id, enabled, processor } => (
+                                    id.as_str(), "structural", processor.id.as_str(), *enabled,
+                                    format_params(&processor.params),
+                                ),
+                                ProcessorEntry::AudioPlugin { id, enabled, processor } => (
+                                    id.as_str(), "audio-plugin", processor.id.as_str(), *enabled,
+                                    format_params(&processor.params),
+                                ),
+                            };
+                            vec![id.to_string(), kind.to_string(), proc_id.to_string(),
+                                 enabled.to_string(), params]
+                        }).collect(),
+                    );
                 }
             }
         }
@@ -107,26 +113,27 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) 
         PresetsCommand::Create { title, description } => {
             let slug = slugify(&title);
             preset_service::create_preset(db, library_dir, &slug, &title, &description).await?;
-            println!("Created preset '{title}'");
-            println!("  slug: {slug}");
-            if !description.is_empty() {
-                println!("  description: {description}");
-            }
-            println!("  processors: (none — use 'presets add-processor {slug} <type>' to add)");
+            print_result("Created preset", &[
+                Field("slug", slug.clone()),
+                Field("title", title.clone()),
+                Field("description", if description.is_empty() { "-".into() } else { description.clone() }),
+                Field("processors", format!("(none — use 'presets add-processor {slug} <type>' to add)")),
+            ]);
         }
 
         PresetsCommand::Remove { slug } => {
             preset_service::delete_preset(db, library_dir, &slug).await?;
-            println!("removed '{slug}'");
+            print_result(&format!("Removed preset '{slug}'"), &[]);
         }
 
         PresetsCommand::AddProcessor { preset_slug, processor_type } => {
             let registry = structural_processors::registry();
             let entry = registry
-                .iter()
+                .values()
                 .find(|e| (e.descriptor)().id == processor_type)
                 .ok_or_else(|| {
-                    let valid: Vec<&str> = registry.iter().map(|e| (e.descriptor)().id).collect();
+                    let mut valid: Vec<&str> = registry.values().map(|e| (e.descriptor)().id).collect();
+                    valid.sort_unstable();
                     anyhow::anyhow!(
                         "unknown processor type '{}'. Valid types: {}",
                         processor_type,
@@ -139,10 +146,10 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) 
             for p in descriptor.parameters {
                 let (param_id, val) = match p {
                     ParameterDescriptor::Time { id, default, .. } => {
-                        (*id, serde_json::json!(*default))
+                        (id, serde_json::json!(default))
                     }
                     ParameterDescriptor::Int { id, default, .. } => {
-                        (*id, serde_json::json!(*default))
+                        (id, serde_json::json!(default))
                     }
                 };
                 default_params.insert(param_id.to_string(), val);
@@ -164,7 +171,26 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) 
             sidecar::write_preset_sidecar(lib, &sc)?;
             preset_service::update_preset_processors(db, library_dir, &preset_slug, sc.processors).await?;
 
-            println!("{instance_id}");
+            print_result("Added processor", &[
+                Field("id", instance_id.clone()),
+                Field("preset", preset_slug.clone()),
+                Field("type", processor_type.clone()),
+            ]);
+        }
+
+        PresetsCommand::Edit { slug } => {
+            super::presets_editor::run_editor(db, library_dir, &slug).await?;
+        }
+
+        PresetsCommand::SetParam { preset_slug, instance_uuid, key, value } => {
+            let parsed = parse_param_value(&value);
+            preset_service::set_processor_param(db, library_dir, &preset_slug, &instance_uuid, &key, parsed).await?;
+            print_result("Set parameter", &[
+                Field("preset", preset_slug.clone()),
+                Field("processor", instance_uuid.clone()),
+                Field("key", key.clone()),
+                Field("value", value.clone()),
+            ]);
         }
 
         PresetsCommand::RemoveProcessor { preset_slug, instance_uuid } => {
@@ -183,10 +209,24 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) 
             }
             sidecar::write_preset_sidecar(lib, &sc)?;
             preset_service::update_preset_processors(db, library_dir, &preset_slug, sc.processors).await?;
-            println!("removed processor '{instance_uuid}'");
+            print_result(&format!("Removed processor '{instance_uuid}'"), &[
+                Field("preset", preset_slug.clone()),
+            ]);
         }
     }
     Ok(())
+}
+
+fn parse_param_value(s: &str) -> serde_json::Value {
+    if let Ok(i) = s.parse::<i64>() {
+        return serde_json::Value::Number(i.into());
+    }
+    if let Ok(f) = s.parse::<f64>() {
+        if let Some(n) = serde_json::Number::from_f64(f) {
+            return serde_json::Value::Number(n);
+        }
+    }
+    serde_json::Value::String(s.to_string())
 }
 
 fn format_params(params: &serde_json::Value) -> String {

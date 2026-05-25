@@ -36,6 +36,7 @@ pub fn load() -> Result<AppSettings> {
     serde_json::from_str(&text).context("parsing settings JSON")
 }
 
+#[allow(dead_code)]
 pub fn save(settings: &AppSettings) -> Result<()> {
     let path = settings_path();
     if let Some(parent) = path.parent() {

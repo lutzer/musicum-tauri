@@ -89,6 +89,41 @@ pub async fn delete_preset(
     Ok(())
 }
 
+pub async fn set_processor_param(
+    db: &DatabaseConnection,
+    library_dir: &str,
+    preset_slug: &str,
+    instance_uuid: &str,
+    key: &str,
+    value: serde_json::Value,
+) -> Result<(), ServiceError> {
+    let lib = Path::new(library_dir);
+    let mut sc = sidecar::read_preset_sidecar(lib, preset_slug)?;
+
+    let found = sc.processors.iter_mut().find(|e| {
+        let id = match e {
+            sidecar::ProcessorEntry::Structural { id, .. } => id.as_str(),
+            sidecar::ProcessorEntry::AudioPlugin { id, .. } => id.as_str(),
+        };
+        id == instance_uuid
+    });
+
+    let entry = found.ok_or_else(|| {
+        ServiceError::NotFound(format!("processor '{instance_uuid}' in preset '{preset_slug}'"))
+    })?;
+
+    let params = match entry {
+        sidecar::ProcessorEntry::Structural { processor, .. } => &mut processor.params,
+        sidecar::ProcessorEntry::AudioPlugin { processor, .. } => &mut processor.params,
+    };
+    if let Some(map) = params.as_object_mut() {
+        map.insert(key.to_string(), value);
+    }
+
+    sidecar::write_preset_sidecar(lib, &sc)?;
+    update_preset_processors(db, library_dir, preset_slug, sc.processors).await
+}
+
 pub async fn update_preset_processors(
     db: &DatabaseConnection,
     _library_dir: &str,

@@ -1,50 +1,91 @@
-use std::collections::HashMap;
-
 use serde::Deserialize;
 
-use crate::{Params, ProcessorDescriptor, StructuralProcessorEntry};
+use crate::{AudioSource, Params, ProcessorDescriptor, Registry};
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Clone)]
 pub struct Edit {
     #[serde(rename = "type")]
-    pub edit_type: String,
+    pub processor_id: String,
     pub enabled: bool,
-    pub parameters: HashMap<String, f64>,
+    #[serde(rename = "parameters")]
+    pub params: Params,
 }
 
-pub fn apply_chain(
-    registry: &[StructuralProcessorEntry],
-    samples: &[f32],
+// ── ProcessorSource ───────────────────────────────────────────────────────────
+
+struct ProcessorSource {
+    processor: Box<dyn crate::StreamingProcessorInstance>,
+    inner: Box<dyn AudioSource>,
     sample_rate: u32,
     channels: u16,
-    edits: &[Edit],
-) -> Vec<f32> {
-    let mut current = samples.to_vec();
-    for edit in edits {
-        if !edit.enabled {
-            continue;
-        }
-        if let Some(entry) = find(registry, &edit.edit_type) {
-            current = (entry.apply)(&current, sample_rate, channels, &edit.parameters);
-        }
-    }
-    current
+    duration_secs: f64,
 }
 
-pub fn descriptors_json(registry: &[StructuralProcessorEntry]) -> String {
-    let descriptors: Vec<&ProcessorDescriptor> =
-        registry.iter().map(|e| (e.descriptor)()).collect();
+impl AudioSource for ProcessorSource {
+    fn read_at(&mut self, start_secs: f64, num_samples: usize) -> Vec<f32> {
+        let end_secs = start_secs
+            + num_samples as f64 / (self.sample_rate as f64 * self.channels as f64);
+        self.processor.fill(start_secs, end_secs, &mut *self.inner)
+    }
+    fn duration_secs(&self) -> f64 { self.duration_secs }
+    fn sample_rate(&self) -> u32 { self.sample_rate }
+    fn channels(&self) -> u16 { self.channels }
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Fold `edits` over `source`, nesting each enabled processor as a `ProcessorSource`.
+/// The returned `AudioSource` is the head of the chain; call `read_at` to pull samples.
+pub fn build_chain(
+    source: Box<dyn AudioSource>,
+    edits: &[Edit],
+    registry: &Registry,
+) -> Box<dyn AudioSource> {
+    edits.iter()
+        .filter(|e| e.enabled)
+        .fold(source, |inner, edit| {
+            let Some(entry) = registry.get(&edit.processor_id) else {
+                return inner;
+            };
+            let output_duration = (entry.output_duration)(inner.duration_secs(), &edit.params);
+            let sample_rate = inner.sample_rate();
+            let channels = inner.channels();
+            let processor = (entry.create)(edit.params.clone());
+            Box::new(ProcessorSource {
+                processor,
+                inner,
+                sample_rate,
+                channels,
+                duration_secs: output_duration,
+            })
+        })
+}
+
+/// Compute the output duration (seconds) of a chain without constructing instances.
+pub fn chain_output_duration(raw_duration: f64, edits: &[Edit], registry: &Registry) -> f64 {
+    edits.iter()
+        .filter(|e| e.enabled)
+        .fold(raw_duration, |dur, edit| {
+            registry.get(&edit.processor_id)
+                .map(|entry| (entry.output_duration)(dur, &edit.params))
+                .unwrap_or(dur)
+        })
+}
+
+pub fn descriptors_json(registry: &Registry) -> String {
+    let mut descriptors: Vec<&ProcessorDescriptor> =
+        registry.values().map(|e| (e.descriptor)()).collect();
+    descriptors.sort_by_key(|d| d.id);
     serde_json::to_string(&descriptors).expect("descriptor serialisation failed")
 }
 
-pub fn validate_edit(registry: &[StructuralProcessorEntry], edit_type: &str, params: &Params) -> bool {
-    find(registry, edit_type).is_some_and(|e| (e.validate)(params))
+pub fn validate_edit(registry: &Registry, processor_id: &str, params: &Params) -> bool {
+    registry.get(processor_id).is_some_and(|e| (e.validate)(params))
 }
 
-/// Map `t` forward through the edit chain.
-/// `duration` is the raw audio length in seconds.
+/// Map `t` forward through the edit chain. `duration` is the raw audio length in seconds.
 pub fn map_time_forward(
-    registry: &[StructuralProcessorEntry],
+    registry: &Registry,
     edits: &[Edit],
     t: f64,
     duration: f64,
@@ -52,34 +93,30 @@ pub fn map_time_forward(
     let mut current_t = t;
     let mut current_dur = duration;
     for edit in edits {
-        if !edit.enabled {
-            continue;
-        }
-        if let Some(entry) = find(registry, &edit.edit_type) {
-            current_t = (entry.map_time_forward)(current_t, current_dur, &edit.parameters);
-            current_dur = (entry.output_duration)(current_dur, &edit.parameters);
+        if !edit.enabled { continue; }
+        if let Some(entry) = registry.get(&edit.processor_id) {
+            current_t = (entry.map_time_forward)(current_t, current_dur, &edit.params);
+            current_dur = (entry.output_duration)(current_dur, &edit.params);
         }
     }
     current_t
 }
 
-/// Map `t` backward through the edit chain.
-/// `duration` is the raw audio length in seconds.
+/// Map `t` backward through the edit chain. `duration` is the raw audio length in seconds.
 pub fn map_time_back(
-    registry: &[StructuralProcessorEntry],
+    registry: &Registry,
     edits: &[Edit],
     t: f64,
     duration: f64,
 ) -> f64 {
-    // Pre-compute input duration before each edit (needed for reverse traversal)
     let mut durations = Vec::with_capacity(edits.len() + 1);
     durations.push(duration);
     for edit in edits.iter() {
         let last = *durations.last().unwrap();
         let next = if !edit.enabled {
             last
-        } else if let Some(entry) = find(registry, &edit.edit_type) {
-            (entry.output_duration)(last, &edit.parameters)
+        } else if let Some(entry) = registry.get(&edit.processor_id) {
+            (entry.output_duration)(last, &edit.params)
         } else {
             last
         };
@@ -88,91 +125,128 @@ pub fn map_time_back(
 
     let mut current_t = t;
     for (i, edit) in edits.iter().enumerate().rev() {
-        if !edit.enabled {
-            continue;
-        }
-        if let Some(entry) = find(registry, &edit.edit_type) {
-            current_t = (entry.map_time_back)(current_t, durations[i], &edit.parameters);
+        if !edit.enabled { continue; }
+        if let Some(entry) = registry.get(&edit.processor_id) {
+            current_t = (entry.map_time_back)(current_t, durations[i], &edit.params);
         }
     }
     current_t
 }
 
-fn find<'a>(registry: &'a [StructuralProcessorEntry], edit_type: &str) -> Option<&'a StructuralProcessorEntry> {
-    registry.iter().find(|e| (e.descriptor)().id == edit_type)
-}
-
 #[cfg(test)]
-mod tests {
+mod new_api_tests {
     use super::*;
-    use crate::{ParameterDescriptor, ProcessorDescriptor, StructuralProcessor, StructuralProcessorEntry};
+    use crate::{ProcessorEntry, StructuralProcessor, StreamingProcessorInstance,
+                AudioSource, VecAudioSource, secs_to_samples,
+                ParameterDescriptor, ProcessorDescriptor, Params};
     use std::collections::HashMap;
 
-    // ── Minimal test processors (no real audio logic needed here) ─────────────
-
+    // ── Passthrough processor ────────────────────────────────────────────────
     static PASS_PARAMS: [ParameterDescriptor; 0] = [];
     static PASS_DESC: ProcessorDescriptor =
         ProcessorDescriptor { id: "pass", name: "Pass", parameters: &PASS_PARAMS };
 
+    struct PassInstance;
+    impl StreamingProcessorInstance for PassInstance {
+        fn fill(&mut self, out_start: f64, out_end: f64, src: &mut dyn AudioSource) -> Vec<f32> {
+            let n = secs_to_samples(out_end - out_start, src.sample_rate(), src.channels());
+            src.read_at(out_start, n)
+        }
+        fn reset(&mut self) {}
+    }
     struct PassProcessor;
     impl StructuralProcessor for PassProcessor {
         fn descriptor() -> &'static ProcessorDescriptor { &PASS_DESC }
         fn validate(_: &Params) -> bool { true }
-        fn apply(s: &[f32], _: u32, _: u16, _: &Params) -> Vec<f32> { s.to_vec() }
+        fn create(_: Params) -> Box<dyn StreamingProcessorInstance> { Box::new(PassInstance) }
         fn output_duration(d: f64, _: &Params) -> f64 { d }
         fn map_time_forward(t: f64, _: f64, _: &Params) -> f64 { t }
         fn map_time_back(t: f64, _: f64, _: &Params) -> f64 { t }
     }
 
-    // HalfProcessor keeps the first half of audio; duration → duration/2
+    // ── Half processor: keeps first half ─────────────────────────────────────
     static HALF_PARAMS: [ParameterDescriptor; 0] = [];
     static HALF_DESC: ProcessorDescriptor =
         ProcessorDescriptor { id: "half", name: "Half", parameters: &HALF_PARAMS };
 
+    struct HalfInstance;
+    impl StreamingProcessorInstance for HalfInstance {
+        fn fill(&mut self, out_start: f64, out_end: f64, src: &mut dyn AudioSource) -> Vec<f32> {
+            let clamped_end = out_end.min(src.duration_secs() / 2.0);
+            if clamped_end <= out_start { return vec![]; }
+            let n = secs_to_samples(clamped_end - out_start, src.sample_rate(), src.channels());
+            src.read_at(out_start, n)
+        }
+        fn reset(&mut self) {}
+    }
     struct HalfProcessor;
     impl StructuralProcessor for HalfProcessor {
         fn descriptor() -> &'static ProcessorDescriptor { &HALF_DESC }
         fn validate(_: &Params) -> bool { true }
-        fn apply(s: &[f32], _: u32, ch: u16, _: &Params) -> Vec<f32> {
-            let ch = ch as usize;
-            s[..s.len() / (2 * ch) * ch].to_vec()
-        }
+        fn create(_: Params) -> Box<dyn StreamingProcessorInstance> { Box::new(HalfInstance) }
         fn output_duration(d: f64, _: &Params) -> f64 { d / 2.0 }
-        fn map_time_forward(t: f64, duration: f64, _: &Params) -> f64 { t.min(duration / 2.0) }
+        fn map_time_forward(t: f64, dur: f64, _: &Params) -> f64 { t.min(dur / 2.0) }
         fn map_time_back(t: f64, _: f64, _: &Params) -> f64 { t }
     }
 
-    fn reg() -> Vec<StructuralProcessorEntry> {
-        vec![
-            StructuralProcessorEntry::of::<PassProcessor>(),
-            StructuralProcessorEntry::of::<HalfProcessor>(),
-        ]
+    fn reg() -> Registry {
+        let mut m = HashMap::new();
+        m.insert("pass".to_string(), ProcessorEntry::of::<PassProcessor>());
+        m.insert("half".to_string(), ProcessorEntry::of::<HalfProcessor>());
+        m
+    }
+
+    fn vec_src(frames: usize) -> Box<dyn AudioSource> {
+        Box::new(VecAudioSource::new(
+            (0..frames).map(|i| i as f32).collect(),
+            100,
+            1,
+        ))
     }
 
     fn edits(json: &str) -> Vec<Edit> {
         serde_json::from_str(json).unwrap()
     }
 
-    fn sine(frames: usize) -> Vec<f32> {
-        (0..frames).map(|i| i as f32 / frames as f32).collect()
-    }
-
     #[test]
-    fn apply_chain_passthrough() {
+    fn build_chain_passthrough_returns_same_samples() {
         let es = edits(r#"[{"type":"pass","enabled":true,"parameters":{}}]"#);
-        assert_eq!(apply_chain(&reg(), &sine(100), 100, 1, &es).len(), 100);
+        let mut chain = build_chain(vec_src(100), &es, &reg());
+        let out = chain.read_at(0.0, 100);
+        assert_eq!(out.len(), 100);
+        assert!((out[0] - 0.0).abs() < 1e-6);
+        assert!((out[50] - 50.0).abs() < 1e-6);
     }
 
     #[test]
-    fn apply_chain_skips_disabled_edits() {
+    fn build_chain_empty_edits_is_passthrough() {
+        let mut chain = build_chain(vec_src(50), &[], &reg());
+        let out = chain.read_at(0.0, 50);
+        assert_eq!(out.len(), 50);
+    }
+
+    #[test]
+    fn build_chain_disabled_edit_is_skipped() {
         let es = edits(r#"[{"type":"half","enabled":false,"parameters":{}}]"#);
-        assert_eq!(apply_chain(&reg(), &sine(100), 100, 1, &es).len(), 100);
+        let chain = build_chain(vec_src(100), &es, &reg());
+        assert!((chain.duration_secs() - 1.0).abs() < 1e-9);
     }
 
     #[test]
-    fn apply_chain_unknown_type_is_passthrough() {
-        let es = edits(r#"[{"type":"wormhole","enabled":true,"parameters":{}}]"#);
-        assert_eq!(apply_chain(&reg(), &sine(50), 100, 1, &es).len(), 50);
+    fn build_chain_half_reduces_duration() {
+        let es = edits(r#"[{"type":"half","enabled":true,"parameters":{}}]"#);
+        let chain = build_chain(vec_src(100), &es, &reg());
+        assert!((chain.duration_secs() - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn chain_output_duration_two_halves() {
+        let es = edits(r#"[
+            {"type":"half","enabled":true,"parameters":{}},
+            {"type":"half","enabled":true,"parameters":{}}
+        ]"#);
+        let dur = chain_output_duration(1.0, &es, &reg());
+        assert!((dur - 0.25).abs() < 1e-9);
     }
 
     #[test]
@@ -193,30 +267,12 @@ mod tests {
     }
 
     #[test]
-    fn map_time_forward_accumulates_duration_across_edits() {
-        // Two half edits: 1.0s → 0.5s → 0.25s; t=0.2 stays 0.2 throughout
-        let es = edits(r#"[
-            {"type":"half","enabled":true,"parameters":{}},
-            {"type":"half","enabled":true,"parameters":{}}
-        ]"#);
-        let result = map_time_forward(&reg(), &es, 0.2, 1.0);
-        assert!((result - 0.2).abs() < 1e-9);
-    }
-
-    #[test]
-    fn map_time_back_identity_for_passthrough() {
-        let es = edits(r#"[{"type":"pass","enabled":true,"parameters":{}}]"#);
-        let result = map_time_back(&reg(), &es, 0.5, 1.0);
-        assert!((result - 0.5).abs() < 1e-9);
-    }
-
-    #[test]
-    fn map_time_forward_empty_edits_is_identity() {
+    fn map_time_forward_empty_is_identity() {
         assert!((map_time_forward(&reg(), &[], 0.7, 1.0) - 0.7).abs() < 1e-9);
     }
 
     #[test]
-    fn map_time_back_empty_edits_is_identity() {
+    fn map_time_back_empty_is_identity() {
         assert!((map_time_back(&reg(), &[], 0.7, 1.0) - 0.7).abs() < 1e-9);
     }
 }

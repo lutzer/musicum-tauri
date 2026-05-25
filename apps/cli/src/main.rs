@@ -58,16 +58,13 @@ async fn main() -> Result<()> {
         app_settings.library_dir = lib;
     }
 
-    match cli.command {
-        Commands::Config => {
-            println!("Settings file: {}", settings::settings_path().display());
-            println!("Library dir:   {}", app_settings.library_dir);
-            if let Some(gen) = &app_settings.generated_dir {
-                println!("Generated dir: {gen}");
-            }
-            return Ok(());
+    if let Commands::Config = cli.command {
+        println!("Settings file: {}", settings::settings_path().display());
+        println!("Library dir:   {}", app_settings.library_dir);
+        if let Some(gen) = &app_settings.generated_dir {
+            println!("Generated dir: {gen}");
         }
-        _ => {}
+        return Ok(());
     }
 
     let db = musicum_core::db::connect(&app_settings.library_dir).await?;
@@ -76,7 +73,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Sync              => commands::sync::run(&db, &app_settings).await?,
         Commands::Files(args)       => commands::files::run(&db, args).await?,
-        Commands::Clips(args)       => commands::clips::run(&db, args).await?,
+        Commands::Clips(args)       => commands::clips::run(&db, library_dir, args).await?,
         Commands::Collections(args) => commands::collections::run(&db, args).await?,
         Commands::Presets(args)     => commands::presets::run(&db, library_dir, args).await?,
         Commands::Processors(args)  => commands::processors::run(args),

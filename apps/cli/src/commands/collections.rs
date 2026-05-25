@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 use musicum_core::services::collection_service;
 use sea_orm::DatabaseConnection;
 
-use crate::output::{print_detail, print_json, print_table};
+use crate::output::{DetailItem::Field, print_detail, print_json, print_table};
 
 #[derive(Debug, Args)]
 pub struct CollectionsArgs {
@@ -34,8 +34,8 @@ pub async fn run(db: &DatabaseConnection, args: CollectionsArgs) -> Result<()> {
                 println!("No collections. Add a sidecar under .musicum/collections/ and run sync.");
             } else {
                 print_table(
-                    ("SLUG", "TITLE"),
-                    cols.iter().map(|c| (c.slug.clone(), c.title.clone())).collect(),
+                    &["SLUG", "TITLE"],
+                    cols.iter().map(|c| vec![c.slug.clone(), c.title.clone()]).collect(),
                 );
             }
         }
@@ -44,10 +44,10 @@ pub async fn run(db: &DatabaseConnection, args: CollectionsArgs) -> Result<()> {
             if json {
                 print_json(&col);
             } else {
-                print_detail(vec![
-                    ("slug", col.slug.clone()),
-                    ("title", col.title.clone()),
-                    ("description", if col.description.is_empty() { "-".into() } else { col.description.clone() }),
+                print_detail(&[
+                    Field("slug", col.slug.clone()),
+                    Field("title", col.title.clone()),
+                    Field("description", if col.description.is_empty() { "-".into() } else { col.description.clone() }),
                 ]);
             }
         }
