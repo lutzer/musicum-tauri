@@ -34,6 +34,7 @@ pub async fn run(db: &DatabaseConnection, args: CollectionsArgs) -> Result<()> {
                 println!("No collections. Add a sidecar under .musicum/collections/ and run sync.");
             } else {
                 print_table(
+                    "collections",
                     &["SLUG", "TITLE"],
                     cols.iter().map(|c| vec![c.slug.clone(), c.title.clone()]).collect(),
                 );

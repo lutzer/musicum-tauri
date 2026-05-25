@@ -31,6 +31,7 @@ pub fn run(args: ProcessorsArgs) {
                 println!("No processors registered.");
             } else {
                 print_table(
+                    "processors",
                     &["ID", "NAME", "PARAMETERS"],
                     entries
                         .iter()

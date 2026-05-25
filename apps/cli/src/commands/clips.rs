@@ -6,7 +6,7 @@ use sea_orm::DatabaseConnection;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::output::{DetailItem::{Field, Section}, print_detail, print_json, print_result, print_table};
+use crate::output::{DetailItem::{Field, Section}, print_detail, print_json, print_result, print_section_header, print_table};
 
 #[derive(Debug, Args)]
 pub struct ClipsArgs {
@@ -57,6 +57,7 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: ClipsArgs) ->
                     println!("No clips for '{slug}'. Sync or create clips via sidecar.");
                 } else {
                     print_table(
+                        "clips",
                         &["SLUG", "TITLE  [CACHED]"],
                         clips.iter().map(|c| vec![c.slug.clone(), format!("{}  [{}]", c.title, c.cached)]).collect(),
                     );
@@ -73,6 +74,7 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: ClipsArgs) ->
                     let file_slugs: HashMap<String, String> =
                         files.into_iter().map(|f| (f.id, f.slug)).collect();
                     print_table(
+                        "clips",
                         &["SLUG", "FILE  TITLE  [CACHED]"],
                         clips.iter().map(|c| {
                             let file_slug = file_slugs.get(&c.file_id).map(|s| s.as_str()).unwrap_or("?");
@@ -89,15 +91,15 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: ClipsArgs) ->
             if json {
                 print_json(&serde_json::json!({ "clip": clip, "file": file }));
             } else {
-                let processors: serde_json::Value =
-                    serde_json::from_str(&clip.processors).unwrap_or(serde_json::json!([]));
+                let processors: Vec<sidecar::ProcessorEntry> =
+                    serde_json::from_str(&clip.processors).unwrap_or_default();
                 print_detail(&[
+                    Section("clip"),
                     Field("slug", clip.slug.clone()),
                     Field("title", clip.title.clone()),
                     Field("cached", clip.cached.clone()),
                     Field("cached_path", clip.cached_path.clone().unwrap_or_else(|| "-".into())),
                     Field("duration", clip.duration.map_or("-".into(), |d| format!("{d:.3}s"))),
-                    Field("processors", serde_json::to_string_pretty(&processors).unwrap()),
                     Field("notes", if clip.notes.is_empty() { "-".into() } else { clip.notes.clone() }),
                     Section("file"),
                     Field("slug", file.slug.clone()),
@@ -107,6 +109,38 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: ClipsArgs) ->
                     Field("channels", file.channels.to_string()),
                     Field("mime", file.mime_type.clone()),
                 ]);
+                if processors.is_empty() {
+                    print_section_header("processors");
+                    println!("(none)");
+                } else {
+                    print_table(
+                        "processors",
+                        &["#", "TYPE", "PROCESSOR", "ENABLED", "PARAMS"],
+                        processors.iter().enumerate().map(|(i, p)| {
+                            let (type_str, enabled, proc_id, params) = match p {
+                                sidecar::ProcessorEntry::Structural { enabled, processor, .. } =>
+                                    ("structural", *enabled, &processor.id, &processor.params),
+                                sidecar::ProcessorEntry::AudioPlugin { enabled, processor, .. } =>
+                                    ("audio-plugin", *enabled, &processor.id, &processor.params),
+                            };
+                            let params_str = if let Some(obj) = params.as_object() {
+                                obj.iter()
+                                    .map(|(k, v)| format!("{k}={}", v.to_string().trim_matches('"')))
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            } else {
+                                String::new()
+                            };
+                            vec![
+                                (i + 1).to_string(),
+                                type_str.to_string(),
+                                proc_id.clone(),
+                                enabled.to_string(),
+                                params_str,
+                            ]
+                        }).collect(),
+                    );
+                }
             }
         }
         ClipsCommand::Create { file_slug, title } => {

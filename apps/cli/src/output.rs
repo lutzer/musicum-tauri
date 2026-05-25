@@ -2,7 +2,22 @@ use crossterm::terminal;
 use serde::Serialize;
 
 pub fn print_json<T: Serialize>(value: &T) {
-    println!("{}", serde_json::to_string_pretty(value).unwrap());
+    let json = serde_json::to_string_pretty(value).unwrap();
+    let term_w = terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
+    let inner_w = term_w.saturating_sub(4); // 2 for "│ " + 2 for " │"
+    let top = format!("┌{}┐", "─".repeat(term_w - 2));
+    let bot = format!("└{}┘", "─".repeat(term_w - 2));
+    println!("{top}");
+    for line in json.lines() {
+        let char_count = line.chars().count();
+        if char_count <= inner_w {
+            println!("│ {line:<inner_w$} │");
+        } else {
+            let truncated: String = line.chars().take(inner_w.saturating_sub(1)).collect();
+            println!("│ {truncated}… │");
+        }
+    }
+    println!("{bot}");
 }
 
 pub enum DetailItem<'a> {
@@ -10,8 +25,16 @@ pub enum DetailItem<'a> {
     Section(&'a str),
 }
 
-pub fn print_table(headers: &[&str], rows: Vec<Vec<String>>) {
+pub fn print_section_header(title: &str) {
     let term_w = terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
+    let prefix = format!("── {title} ");
+    let dashes = "─".repeat(term_w.saturating_sub(prefix.chars().count()));
+    println!("\n{prefix}{dashes}");
+}
+
+pub fn print_table(title: &str, headers: &[&str], rows: Vec<Vec<String>>) {
+    let term_w = terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
+    print_section_header(title);
     print!("{}", format_table(headers, &rows, term_w));
 }
 
@@ -24,7 +47,7 @@ pub fn print_detail(items: &[DetailItem]) {
     for item in items {
         match item {
             DetailItem::Field(key, val) => println!("{key:>key_w$}: {val}"),
-            DetailItem::Section(title) => println!("\n{title}"),
+            DetailItem::Section(title) => print_section_header(title),
         }
     }
 }
@@ -88,10 +111,10 @@ fn format_table(headers: &[&str], rows: &[Vec<String>], term_w: usize) -> String
 
     append_row(&mut out, headers);
 
-    for _ in 0..term_w {
-        out.push('─');
-    }
-    out.push('\n');
+    // for _ in 0..term_w {
+    //     out.push('─');
+    // }
+    // out.push('\n');
 
     for row in rows {
         let cells: Vec<&str> = row.iter().map(|s| s.as_str()).collect();

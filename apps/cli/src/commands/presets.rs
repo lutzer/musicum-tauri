@@ -8,7 +8,7 @@ use structural_processor_sdk::processor::ParameterDescriptor;
 use uuid::Uuid;
 use std::path::Path;
 
-use crate::output::{DetailItem::Field, print_detail, print_json, print_result, print_table};
+use crate::output::{DetailItem::Field, print_detail, print_json, print_result, print_section_header, print_table};
 
 #[derive(Debug, Args)]
 pub struct PresetsArgs {
@@ -67,6 +67,7 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) 
                 println!("No presets. Add a sidecar under .musicum/presets/ and run sync.");
             } else {
                 print_table(
+                    "presets",
                     &["SLUG", "TITLE"],
                     presets.iter().map(|p| vec![p.slug.clone(), p.title.clone()]).collect(),
                 );
@@ -86,10 +87,11 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) 
                     Field("description", if preset.description.is_empty() { "-".into() } else { preset.description.clone() }),
                 ]);
                 if processors.is_empty() {
-                    println!("\nprocessors: (none)");
+                    print_section_header("processors");
+                    println!("(none)");
                 } else {
-                    println!("\nprocessors:");
                     print_table(
+                        "processors",
                         &["UUID", "KIND", "PROC", "ENABLED", "PARAMS"],
                         processors.iter().map(|entry| {
                             let (id, kind, proc_id, enabled, params) = match entry {

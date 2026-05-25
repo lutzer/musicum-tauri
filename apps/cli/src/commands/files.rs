@@ -36,6 +36,7 @@ pub async fn run(db: &DatabaseConnection, args: FilesArgs) -> Result<()> {
                 println!("No files. Run `musicum sync` first.");
             } else {
                 print_table(
+                    "files",
                     &["SLUG", "NAME  [DURATION  RATE  CH]"],
                     files
                         .iter()
@@ -62,6 +63,7 @@ pub async fn run(db: &DatabaseConnection, args: FilesArgs) -> Result<()> {
                 print_json(&FileDetail { file, metadata: meta, clips });
             } else {
                 let mut items: Vec<DetailItem> = vec![
+                    Section("file"),
                     Field("slug", file.slug.clone()),
                     Field("name", file.name.clone()),
                     Field("path", file.path.clone()),
@@ -82,8 +84,8 @@ pub async fn run(db: &DatabaseConnection, args: FilesArgs) -> Result<()> {
                 print_detail(&items);
 
                 if !clips.is_empty() {
-                    println!("\nClips:");
                     print_table(
+                        "clips",
                         &["SLUG", "TITLE  [CACHED]"],
                         clips
                             .iter()
