@@ -1,20 +1,21 @@
-use std::{
-    io::{self, Write},
-    path::PathBuf,
-    time::Duration,
-};
+use std::{io, path::PathBuf, time::Duration};
 
 use anyhow::{anyhow, Result};
 use crossterm::{
-    cursor,
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute, queue,
-    style::Print,
-    terminal,
+    event::{self, Event, KeyCode, KeyModifiers},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use musicum_core::{
     audio::PlaybackEngine,
     services::{clip_service, file_service},
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Alignment, Constraint, Layout},
+    style::{Color, Style},
+    widgets::{Block, Borders, Gauge, Paragraph},
+    Frame, Terminal,
 };
 use sea_orm::DatabaseConnection;
 
@@ -22,7 +23,7 @@ pub async fn run(db: &DatabaseConnection, target: String, force_file: bool, forc
     let path = resolve_path(db, &target, force_file, force_clip).await?;
     let engine = PlaybackEngine::new(&path, &[])?;
     engine.play();
-    run_tui(engine)
+    run_player(engine)
 }
 
 async fn resolve_path(
@@ -45,7 +46,6 @@ async fn resolve_path(
         return Ok(PathBuf::from(file.path));
     }
 
-    // Auto-resolve: try file slug, then clip slug, then literal path
     if let Ok(file) = file_service::get_file_by_slug(db, target).await {
         return Ok(PathBuf::from(file.path));
     }
@@ -54,7 +54,6 @@ async fn resolve_path(
             return Ok(PathBuf::from(file.path));
         }
     }
-    // Fall back to literal file path
     let path = PathBuf::from(target);
     if path.exists() {
         return Ok(path);
@@ -62,127 +61,90 @@ async fn resolve_path(
     Err(anyhow!("'{target}' is not a known slug or an existing file path"))
 }
 
-struct RawModeGuard;
-
-impl Drop for RawModeGuard {
-    fn drop(&mut self) {
-        let _ = terminal::disable_raw_mode();
-        // Move cursor below the player UI and show it again
-        let mut stdout = io::stdout();
-        let _ = execute!(stdout, cursor::Show);
-    }
-}
-
-fn run_tui(engine: PlaybackEngine) -> Result<()> {
+fn run_player(engine: PlaybackEngine) -> Result<()> {
+    enable_raw_mode()?;
     let mut stdout = io::stdout();
-    terminal::enable_raw_mode()?;
-    let _guard = RawModeGuard;
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
 
-    execute!(stdout, cursor::Hide)?;
-
-    // Print initial blank lines that the renderer will overwrite
-    for _ in 0..5 {
-        writeln!(stdout, "\r")?;
-    }
-
-    let mut first = true;
     loop {
-        render(&engine, &mut stdout, first)?;
-        first = false;
+        terminal.draw(|f| draw(f, &engine))?;
 
         if engine.is_finished() {
             break;
         }
 
         if event::poll(Duration::from_millis(50))? {
-            match event::read()? {
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('p'),
-                    ..
-                }) => engine.toggle_pause(),
-
-                Event::Key(KeyEvent {
-                    code: KeyCode::Right,
-                    ..
-                }) => engine.seek(engine.position_secs() + 5.0),
-
-                Event::Key(KeyEvent {
-                    code: KeyCode::Left,
-                    ..
-                }) => engine.seek((engine.position_secs() - 5.0).max(0.0)),
-
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('q'),
-                    ..
-                })
-                | Event::Key(KeyEvent {
-                    code: KeyCode::Esc, ..
-                })
-                | Event::Key(KeyEvent {
-                    code: KeyCode::Char('c'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                }) => break,
-
-                _ => {}
+            if let Event::Key(key) = event::read()? {
+                match (key.code, key.modifiers) {
+                    (KeyCode::Char('p'), _) => engine.toggle_pause(),
+                    (KeyCode::Right, _) => engine.seek(engine.position_secs() + 5.0),
+                    (KeyCode::Left, _) => engine.seek((engine.position_secs() - 5.0).max(0.0)),
+                    (KeyCode::Char('q'), _)
+                    | (KeyCode::Esc, _)
+                    | (KeyCode::Char('c'), KeyModifiers::CONTROL) => break,
+                    _ => {}
+                }
             }
         }
     }
 
-    // Move below UI before exiting
-    queue!(stdout, cursor::MoveDown(1))?;
-    writeln!(stdout, "\r")?;
-    stdout.flush()?;
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     Ok(())
 }
 
-fn render(engine: &PlaybackEngine, stdout: &mut impl Write, first: bool) -> Result<()> {
+fn draw(f: &mut Frame, engine: &PlaybackEngine) {
     let pos = engine.position_secs();
     let dur = engine.duration_secs();
     let paused = engine.is_paused();
 
-    let (term_width, _) = terminal::size().unwrap_or((80, 24));
-    // bar_width = total width minus "[" + "]" + " mm:ss / mm:ss" (14 chars) + 2 padding
-    let bar_width = (term_width as usize).saturating_sub(20).max(5);
+    let [_, center, _] = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(7),
+        Constraint::Fill(1),
+    ])
+    .areas(f.area());
 
-    let filled = if dur > 0.0 {
-        ((pos / dur) * bar_width as f64).round() as usize
+    let title = format!(" {} ", engine.title());
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(center);
+    f.render_widget(block, center);
+
+    let [gauge_area, status_area, _, hints_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    let ratio = if dur > 0.0 { (pos / dur).clamp(0.0, 1.0) } else { 0.0 };
+    let gauge = Gauge::default()
+        .gauge_style(Style::default().fg(Color::Cyan))
+        .ratio(ratio)
+        .label(format!("{} / {}", fmt_duration(pos), fmt_duration(dur)));
+    f.render_widget(gauge, gauge_area);
+
+    let (status_text, status_color) = if paused {
+        ("⏸  Paused", Color::Yellow)
     } else {
-        0
-    }
-    .min(bar_width);
-    let empty = bar_width - filled;
-
-    let dur_str = fmt_duration(dur);
-    let pos_str = fmt_duration(pos);
-    let status = if paused { "⏸  Paused " } else { "▶  Playing" };
-
-    let title_line = format!(" {}  [{}]", engine.title(), dur_str);
-    let sep: String = "─".repeat(term_width as usize);
-    let bar_line = format!(
-        " [{}{}] {} / {}",
-        "█".repeat(filled),
-        "░".repeat(empty),
-        pos_str,
-        dur_str
+        ("▶  Playing", Color::Green)
+    };
+    f.render_widget(
+        Paragraph::new(status_text)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(status_color)),
+        status_area,
     );
-    let status_line = format!(" {status}");
-    let hint_line = " [p] pause  [←/→] seek 5s  [q] quit";
 
-    if !first {
-        queue!(stdout, cursor::MoveUp(5))?;
-    }
-
-    for line in &[&title_line, &sep, &bar_line, &status_line, hint_line] {
-        queue!(
-            stdout,
-            terminal::Clear(terminal::ClearType::CurrentLine),
-            Print(format!("{line}\r\n")),
-        )?;
-    }
-
-    stdout.flush()?;
-    Ok(())
+    f.render_widget(
+        Paragraph::new("[p] pause  [←/→] seek 5s  [q] quit")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::DarkGray)),
+        hints_area,
+    );
 }
 
 fn fmt_duration(secs: f64) -> String {
