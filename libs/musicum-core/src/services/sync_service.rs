@@ -12,6 +12,23 @@ use crate::ServiceError;
 
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "ogg", "aiff", "aif"];
 
+pub fn count_audio_files(library_dir: &str) -> Result<usize, ServiceError> {
+    let lib_path = Path::new(library_dir);
+    let count = WalkDir::new(lib_path)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let p = e.path();
+            if p.components().any(|c| c.as_os_str() == ".musicum") { return false; }
+            if !p.is_file() { return false; }
+            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            AUDIO_EXTENSIONS.contains(&ext.as_str())
+        })
+        .count();
+    Ok(count)
+}
+
 #[derive(Debug, Default)]
 pub struct SyncReport {
     pub files_added:      Vec<String>,
@@ -25,6 +42,7 @@ pub struct SyncReport {
 pub async fn sync_library(
     db: &DatabaseConnection,
     library_dir: &str,
+    on_progress: impl Fn(),
 ) -> Result<SyncReport, ServiceError> {
     let lib_path = Path::new(library_dir);
     let mut report = SyncReport::default();
@@ -68,6 +86,7 @@ pub async fn sync_library(
         let audio_info = probe_audio(path)?;
 
         upsert_file(db, path, &path_str, &hash, &audio_info, &sc, &mut report).await?;
+        on_progress();
     }
 
     // 3. Mark removed files (paths no longer on disk)

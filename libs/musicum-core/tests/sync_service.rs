@@ -16,7 +16,7 @@ async fn sync_discovers_wav_file() {
     common::write_sine_wav(&wav, 0.5);
 
     let db = setup(dir.path()).await;
-    let stats = sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    let stats = sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
 
@@ -38,7 +38,7 @@ async fn sync_creates_sidecar_next_to_audio() {
     common::write_stereo_wav(&wav, 1.0);
 
     let db = setup(dir.path()).await;
-    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
 
@@ -83,7 +83,7 @@ async fn sync_reads_existing_sidecar_with_clips() {
     .unwrap();
 
     let db = setup(dir.path()).await;
-    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
 
@@ -112,13 +112,13 @@ async fn sync_idempotent_on_unchanged_file() {
     let db = setup(dir.path()).await;
 
     // First sync
-    let s1 = sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    let s1 = sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
     assert_eq!(s1.files_added.len(), 1);
 
     // Second sync — file unchanged
-    let s2 = sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    let s2 = sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
     assert!(s2.files_added.is_empty(), "no new files on second sync");
@@ -136,7 +136,7 @@ async fn sync_detects_removed_files() {
     common::write_sine_wav(&wav, 0.3);
 
     let db = setup(dir.path()).await;
-    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
     assert_eq!(file::Entity::find().count(&db).await.unwrap(), 1);
@@ -144,7 +144,7 @@ async fn sync_detects_removed_files() {
     // Delete the file from disk
     std::fs::remove_file(&wav).unwrap();
 
-    let s2 = sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    let s2 = sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
     assert_eq!(s2.files_removed.len(), 1);
@@ -160,7 +160,7 @@ async fn sync_walks_subdirectories() {
     common::write_sine_wav(&dir.path().join("pad.wav"), 1.0);
 
     let db = setup(dir.path()).await;
-    let stats = sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    let stats = sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
 
@@ -189,7 +189,7 @@ async fn sync_preset_sidecar() {
     sidecar::write_preset_sidecar(dir.path(), &preset_sc).unwrap();
 
     let db = setup(dir.path()).await;
-    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
 
@@ -215,7 +215,7 @@ async fn sync_picks_up_updated_preset_sidecar() {
     sidecar::write_preset_sidecar(dir.path(), &preset_sc).unwrap();
 
     let db = setup(dir.path()).await;
-    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
 
@@ -231,7 +231,7 @@ async fn sync_picks_up_updated_preset_sidecar() {
     sidecar::write_preset_sidecar(dir.path(), &preset_sc).unwrap();
 
     // Second sync should pick up the change
-    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
 
@@ -252,7 +252,7 @@ async fn sync_picks_up_sidecar_metadata_when_audio_unchanged() {
     common::write_sine_wav(&wav, 1.0);
 
     let db = setup(dir.path()).await;
-    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
 
@@ -263,7 +263,7 @@ async fn sync_picks_up_sidecar_metadata_when_audio_unchanged() {
     sc.metadata.key = Some("Am".into());
     std::fs::write(&sidecar_path, serde_json::to_string_pretty(&sc).unwrap()).unwrap();
 
-    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
 
@@ -287,7 +287,7 @@ async fn report_tracks_sidecar_metadata_update() {
     common::write_sine_wav(&wav, 1.0);
 
     let db = setup(dir.path()).await;
-    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
 
@@ -297,7 +297,7 @@ async fn report_tracks_sidecar_metadata_update() {
     let sidecar_path = sidecar::sidecar_path_for_audio(&wav);
     std::fs::write(&sidecar_path, serde_json::to_string_pretty(&sc).unwrap()).unwrap();
 
-    let report = sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    let report = sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
 
@@ -313,12 +313,12 @@ async fn report_sidecar_unchanged_is_silent() {
     common::write_sine_wav(&wav, 1.0);
 
     let db = setup(dir.path()).await;
-    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
 
     // Second sync with no changes at all
-    let report = sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    let report = sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
 
@@ -340,7 +340,7 @@ async fn report_tracks_preset_added_and_updated() {
     sidecar::write_preset_sidecar(dir.path(), &preset_sc).unwrap();
 
     let db = setup(dir.path()).await;
-    let r1 = sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    let r1 = sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
     assert_eq!(r1.presets_added, vec!["Hall Reverb"]);
@@ -350,14 +350,14 @@ async fn report_tracks_preset_added_and_updated() {
     preset_sc.description = "large hall".into();
     sidecar::write_preset_sidecar(dir.path(), &preset_sc).unwrap();
 
-    let r2 = sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    let r2 = sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
     assert!(r2.presets_added.is_empty());
     assert_eq!(r2.presets_updated, vec!["Hall Reverb"]);
 
     // Third sync — nothing changed
-    let r3 = sync_service::sync_library(&db, dir.path().to_str().unwrap())
+    let r3 = sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ())
         .await
         .unwrap();
     assert!(r3.presets_added.is_empty());

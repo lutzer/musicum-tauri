@@ -413,25 +413,26 @@ Lives next to the source audio file.
 
 ```
 <library_dir>/                        # set by user in settings, persisted in app config
-  drums.wav
-  drums.musicum.json
-  synths/
-    pad.wav
-    pad.musicum.json
-  .musicum/
+  files/                              # can be manually overridem in the config
+    drums.wav
+    drums.musicum.json
+    synths/
+      pad.wav
+      pad.musicum.json
+  catalog/                            # location can be manually overridem in the config
+    musicum.db
     collections/
       ep-01.musicum.json
     presets/
       lo-fi.musicum-preset.json
     attachments/
       550e8400-e29b-41d4-a716-446655440000.jpg
-
-<generated_dir>/                      # default: <library_dir>/.generated/
-  waveforms/
-    file_{slug}.waveform.json         # raw file waveform
-    clip_{slug}.waveform.json         # processed clip waveform
-  cache/
-    clip_{slug}.mp3
+  .generated/                         # location can be manually overriden in the config
+    waveforms/
+      file_{slug}.waveform.json         # raw file waveform
+      clip_{slug}.waveform.json         # processed clip waveform
+    cache/
+      clip_{slug}.mp3
 ```
 
 App config (Tauri app data dir):

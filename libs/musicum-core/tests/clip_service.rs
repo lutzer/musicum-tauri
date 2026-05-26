@@ -10,7 +10,7 @@ async fn setup_with_file(lib_path: &std::path::Path, filename: &str) -> sea_orm:
     let wav = lib_path.join(filename);
     common::write_sine_wav(&wav, 0.5);
     let db = db::connect(lib_path.to_str().unwrap()).await.unwrap();
-    sync_service::sync_library(&db, lib_path.to_str().unwrap()).await.unwrap();
+    sync_service::sync_library(&db, lib_path.to_str().unwrap(), || ()).await.unwrap();
     db
 }
 
@@ -69,7 +69,7 @@ async fn create_clip_slug_collision() {
     sidecar::write_file_sidecar(&wav, &sc).unwrap();
 
     let db = db::connect(dir.path().to_str().unwrap()).await.unwrap();
-    sync_service::sync_library(&db, dir.path().to_str().unwrap()).await.unwrap();
+    sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ()).await.unwrap();
 
     let err = clip_service::create_clip(&db, "pad", "My Clip").await.unwrap_err();
     assert!(matches!(err, ServiceError::InvalidInput(_)));
