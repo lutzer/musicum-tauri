@@ -1,9 +1,9 @@
 mod commands;
 mod output;
-mod settings;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use musicum_core::config::{self, LibraryPaths};
 
 #[derive(Parser)]
 #[command(
@@ -48,7 +48,7 @@ enum Commands {
         #[arg(long = "loop")]
         loop_mode: bool,
     },
-    /// Print the path to the settings file
+    /// Print config and resolved library paths
     Config,
 }
 
@@ -56,31 +56,33 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let mut app_settings = settings::load()?;
-    if let Some(lib) = cli.library {
-        app_settings.library_dir = lib;
-    }
+    let paths = if let Some(lib) = cli.library {
+        LibraryPaths::from_override(&lib)
+    } else {
+        config::load()?.library_paths()
+    };
 
     if let Commands::Config = cli.command {
-        println!("Settings file: {}", settings::settings_path().display());
-        println!("Library dir:   {}", app_settings.library_dir);
-        if let Some(gen) = &app_settings.generated_dir {
-            println!("Generated dir: {gen}");
-        }
+        println!("Config file:   {}", config::config_path().display());
+        println!("Library dir:   {}", paths.library_dir.display());
+        println!("Files dir:     {}", paths.files_dir.display());
+        println!("Catalog dir:   {}", paths.catalog_dir.display());
+        println!("Generated dir: {}", paths.generated_dir.display());
         return Ok(());
     }
 
-    let db = musicum_core::db::connect(&app_settings.library_dir).await?;
-    let library_dir = app_settings.library_dir.as_str();
+    let db = musicum_core::db::connect(&paths.catalog_dir).await?;
 
     match cli.command {
-        Commands::Sync              => commands::sync::run(&db, &app_settings).await?,
+        Commands::Sync              => commands::sync::run(&db, &paths).await?,
         Commands::Files(args)       => commands::files::run(&db, args).await?,
-        Commands::Clips(args)       => commands::clips::run(&db, library_dir, args).await?,
+        Commands::Clips(args)       => commands::clips::run(&db, args).await?,
         Commands::Collections(args) => commands::collections::run(&db, args).await?,
-        Commands::Presets(args)     => commands::presets::run(&db, library_dir, args).await?,
+        Commands::Presets(args)     => commands::presets::run(&db, &paths.catalog_dir, args).await?,
         Commands::Processors(args)  => commands::processors::run(args),
-        Commands::Play { target, file, clip, loop_mode } => commands::play::run(&db, target, file, clip, loop_mode).await?,
+        Commands::Play { target, file, clip, loop_mode } => {
+            commands::play::run(&db, target, file, clip, loop_mode).await?
+        }
         Commands::Config => unreachable!(),
     }
 

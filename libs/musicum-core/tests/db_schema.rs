@@ -13,14 +13,14 @@ fn now() -> String {
 
 async fn open_db() -> (sea_orm::DatabaseConnection, tempfile::TempDir) {
     let dir = tempdir().unwrap();
-    let db = db::connect(dir.path().to_str().unwrap()).await.unwrap();
+    let db = db::connect(dir.path()).await.unwrap();
     (db, dir)
 }
 
 #[tokio::test]
 async fn connect_creates_db_file() {
     let (_, dir) = open_db().await;
-    let db_path = dir.path().join(".musicum").join("musicum.db");
+    let db_path = dir.path().join("musicum.db");
     assert!(db_path.exists(), "musicum.db was not created");
 }
 
@@ -42,7 +42,7 @@ async fn schema_version_is_stored() {
 #[tokio::test]
 async fn schema_reset_on_version_bump() {
     let dir = tempdir().unwrap();
-    let path = dir.path().to_str().unwrap();
+    let path = dir.path();
 
     let db = db::connect(path).await.unwrap();
 
@@ -73,7 +73,7 @@ async fn schema_reset_on_version_bump() {
     .unwrap();
     drop(db);
 
-    let db2 = db::connect(path).await.unwrap();
+    let db2 = db::connect(&path).await.unwrap();
     assert_eq!(
         file::Entity::find().count(&db2).await.unwrap(),
         0,

@@ -1,8 +1,8 @@
 # Library Structure & Config Redesign Implementation Plan
 
-**Goal:** Replace the flat `.musicum/` hidden-directory layout with explicit `files/`, `catalog/`, and `.generated/` subdirectories, introduce `~/.musicum/config.toml`, and move all path-resolution logic into `musicum-core`.
+**Goal:** Replace the flat `.musicum/` hidden-directory layout with explicit `files/`, `catalog/`, and `.generated/` subdirectories, introduce `~/.musicum/config.toml`, make collections/presets database-only (no sidecars), and move all path-resolution logic into `musicum-core`.
 
-**Architecture:** A new `musicum_core::config` module owns `AppSettings` (TOML-deserialised), `LibraryPaths` (derived resolved paths), and the `load()` / template-write logic. All core services switch from `library_dir: &str` to `catalog_dir: &Path` or `&LibraryPaths`. The CLI `settings.rs` is deleted; `main.rs` calls `musicum_core::config::load()`.
+**Architecture:** A new `musicum_core::config` module owns `AppSettings` (TOML-deserialised), `LibraryPaths` (derived resolved paths), and the `load()` / template-write logic. Sync walks `files_dir` only — collections and presets are never touched by sync. Preset service becomes fully DB-only. All core services switch from `library_dir: &str` to `catalog_dir: &Path` or `&LibraryPaths`. The CLI `settings.rs` is deleted; `main.rs` calls `musicum_core::config::load()`.
 
 **Tech Stack:** Rust, `toml 0.8` crate (new dep on musicum-core), `serde/serde_derive` (already present), `tempfile` (tests, already present).
 
@@ -16,21 +16,21 @@
 | Modify | `libs/musicum-core/Cargo.toml` | add `toml = "0.8"` |
 | Modify | `libs/musicum-core/src/lib.rs` | expose `pub mod config` |
 | Modify | `libs/musicum-core/src/db/mod.rs` | `connect(catalog_dir: &Path)` |
-| Modify | `libs/musicum-core/src/sidecar.rs` | collection/preset helpers take `catalog_dir: &Path` |
-| Modify | `libs/musicum-core/src/services/sync_service.rs` | take `&LibraryPaths`; walk `files_dir`; pass `catalog_dir` to sidecars |
-| Modify | `libs/musicum-core/src/services/preset_service.rs` | take `catalog_dir: &Path`; drop unused `library_dir` params |
-| Modify | `libs/musicum-core/src/services/clip_service.rs` | drop unused `_library_dir` param from `update_clip_processors` |
+| Modify | `libs/musicum-core/src/sidecar.rs` | remove `CollectionSidecar`, `PresetSidecar`, and all five collection/preset helpers |
+| Modify | `libs/musicum-core/src/services/sync_service.rs` | walks `files_dir`; drops `sync_collections`/`sync_presets`; drops `presets_added`/`presets_updated` from `SyncReport` |
+| Modify | `libs/musicum-core/src/services/preset_service.rs` | fully DB-only; drop all `library_dir` / sidecar params |
+| Modify | `libs/musicum-core/src/services/clip_service.rs` | drop unused `_library_dir: &str` param from `update_clip_processors` |
 | Modify | `libs/musicum-core/tests/common/mod.rs` | add `make_paths(base)` helper |
-| Modify | `libs/musicum-core/tests/sync_service.rs` | use `make_paths`, `&LibraryPaths` throughout |
-| Modify | `libs/musicum-core/tests/clip_service.rs` | use `make_paths` |
-| Modify | `libs/musicum-core/tests/preset_service.rs` | use `make_paths`, `catalog_dir` |
+| Modify | `libs/musicum-core/tests/sync_service.rs` | use `make_paths`; remove preset-sidecar tests |
+| Modify | `libs/musicum-core/tests/clip_service.rs` | use `make_paths`; update `db::connect` call |
+| Modify | `libs/musicum-core/tests/preset_service.rs` | use `test_db()`; remove sidecar assertions; drop dir args |
 | **Delete** | `apps/cli/src/settings.rs` | replaced by `musicum_core::config` |
 | Modify | `apps/cli/src/main.rs` | use `musicum_core::config::load()`; pass `&paths` |
-| Modify | `apps/cli/src/commands/sync.rs` | `run(db, paths: &LibraryPaths)` |
-| Modify | `apps/cli/src/commands/presets.rs` | `run(db, catalog_dir: &Path, args)` |
-| Modify | `apps/cli/src/commands/presets_editor.rs` | `run_editor(db, catalog_dir: &Path, slug)` |
-| Modify | `apps/cli/src/commands/clips.rs` | drop `library_dir` param (no longer needed) |
-| Modify | `apps/cli/Cargo.toml` | remove `serde_json` (may still be needed — check) |
+| Modify | `apps/cli/src/commands/sync.rs` | take `paths: &LibraryPaths`; remove preset summary lines |
+| Modify | `apps/cli/src/commands/presets.rs` | take `catalog_dir: &Path`; `AddProcessor`/`RemoveProcessor` read from DB |
+| Modify | `apps/cli/src/commands/presets_editor.rs` | drop `library_dir` param |
+| Modify | `apps/cli/src/commands/clips.rs` | drop `library_dir` param |
+| Modify | `apps/cli/src/commands/collections.rs` | update empty-list message |
 
 ---
 
@@ -39,9 +39,9 @@
 **Files:**
 - Modify: `libs/musicum-core/Cargo.toml`
 
-Add to `[dependencies]`:
+In `[dependencies]`, after `hex = "0.4"` add:
 ```toml
-toml = "0.8"
+toml        = "0.8"
 ```
 
 Run:
@@ -146,7 +146,6 @@ impl AppSettings {
 }
 
 impl LibraryPaths {
-    /// Construct from a --library override; ignores all config-file overrides.
     pub fn from_override(library_dir: &str) -> Self {
         let library_dir = expand_tilde(library_dir);
         let files_dir     = library_dir.join("files");
@@ -155,34 +154,7 @@ impl LibraryPaths {
         LibraryPaths { library_dir, files_dir, catalog_dir, generated_dir }
     }
 }
-```
 
----
-
-## Task 3: Expose config module in lib.rs
-
-**Files:**
-- Modify: `libs/musicum-core/src/lib.rs`
-
-Add:
-```rust
-pub mod config;
-```
-
-Run:
-```
-cargo build -p musicum-core
-```
-Expected: compiles cleanly.
-
----
-
-## Task 4: Write config unit tests
-
-**Files:**
-- Modify: `libs/musicum-core/src/config.rs` (add `#[cfg(test)]` block at the bottom)
-
-```rust
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,15 +203,24 @@ mod tests {
     #[test]
     fn load_writes_default_config_if_missing() {
         let dir = tempdir().unwrap();
-        // Point HOME to a temp dir so config_path() resolves inside it
         std::env::set_var("HOME", dir.path().to_str().unwrap());
         let settings = load().unwrap();
-        let path = config_path();
-        assert!(path.exists(), "default config should be written");
-        // dir contains "Musik/musicum"
+        assert!(config_path().exists(), "default config should be written");
         assert!(settings.library.dir.contains("Musik"));
     }
 }
+```
+
+---
+
+## Task 3: Expose config module in lib.rs
+
+**Files:**
+- Modify: `libs/musicum-core/src/lib.rs`
+
+Add after `pub mod audio;`:
+```rust
+pub mod config;
 ```
 
 Run:
@@ -250,94 +231,85 @@ Expected: all 4 tests pass.
 
 ---
 
-## Task 5: Update `db::connect()` signature
+## Task 4: Update `db::connect()` signature
 
 **Files:**
 - Modify: `libs/musicum-core/src/db/mod.rs`
 
-Change:
+Replace the `connect` function signature and body opening:
 ```rust
+// Replace this:
 pub async fn connect(library_dir: &str) -> Result<DatabaseConnection, ServiceError> {
     let db_path = format!("{library_dir}/.musicum/musicum.db");
+
     let dir = std::path::Path::new(&db_path).parent().unwrap();
     std::fs::create_dir_all(dir)?;
-    let url = format!("sqlite://{db_path}?mode=rwc");
-```
 
-To:
-```rust
+    let url = format!("sqlite://{db_path}?mode=rwc");
+
+// With this:
 pub async fn connect(catalog_dir: &std::path::Path) -> Result<DatabaseConnection, ServiceError> {
     std::fs::create_dir_all(catalog_dir)?;
     let db_path = catalog_dir.join("musicum.db");
     let url = format!("sqlite://{}?mode=rwc", db_path.display());
 ```
 
-Also update `test_db()` — it uses `sqlite::memory:` so no signature change needed there.
-
-The compiler will now flag every call site. Fix them in subsequent tasks.
+The rest of the function body is unchanged. The compiler will now flag every call site — fix them in subsequent tasks.
 
 ---
 
-## Task 6: Update sidecar collection/preset helpers
+## Task 5: Strip collection/preset code from `sidecar.rs`
 
 **Files:**
 - Modify: `libs/musicum-core/src/sidecar.rs`
 
-Change all five functions that previously used `library_dir.join(".musicum")` to use `catalog_dir` directly:
+Delete the entire `// ── Collection sidecar ───` block (lines defining `CollectionSidecar`).
 
-**`read_collection_sidecars`** — change parameter and path:
-```rust
-pub fn read_collection_sidecars(catalog_dir: &Path) -> Result<Vec<CollectionSidecar>, ServiceError> {
-    let dir = catalog_dir.join("collections");
-    // rest unchanged
-```
+Delete the entire `// ── Preset sidecar ───` block (lines defining `PresetSidecar`).
 
-**`write_collection_sidecar`** — change parameter and path:
-```rust
-pub fn write_collection_sidecar(catalog_dir: &Path, sc: &CollectionSidecar) -> Result<(), ServiceError> {
-    let dir = catalog_dir.join("collections");
-    // rest unchanged
-```
+Delete these five functions entirely:
+- `read_collection_sidecars`
+- `write_collection_sidecar`
+- `read_preset_sidecars`
+- `read_preset_sidecar`
+- `write_preset_sidecar`
 
-**`read_preset_sidecars`** — change parameter and path:
-```rust
-pub fn read_preset_sidecars(catalog_dir: &Path) -> Result<Vec<PresetSidecar>, ServiceError> {
-    let dir = catalog_dir.join("presets");
-    // rest unchanged
-```
+Keep everything else (`ProcessorRef`, `ProcessorEntry`, `FileSidecar`, `FileMetadataSidecar`, `AttachmentSidecar`, `ClipSidecar`, `read_file_sidecar`, `write_file_sidecar`, `sidecar_path_for_audio`).
 
-**`read_preset_sidecar`** — change parameter and path:
-```rust
-pub fn read_preset_sidecar(catalog_dir: &Path, slug: &str) -> Result<PresetSidecar, ServiceError> {
-    let path = catalog_dir.join("presets").join(format!("{slug}.musicum-preset.json"));
-    // rest unchanged
+Run:
 ```
-
-**`write_preset_sidecar`** — change parameter and path:
-```rust
-pub fn write_preset_sidecar(catalog_dir: &Path, sc: &PresetSidecar) -> Result<(), ServiceError> {
-    let dir = catalog_dir.join("presets");
-    // rest unchanged
+cargo build -p musicum-core
 ```
+Expected: compiler errors at call sites in `sync_service.rs` and `preset_service.rs` — fix in the next two tasks.
 
 ---
 
-## Task 7: Update `sync_service`
+## Task 6: Rewrite `sync_service.rs`
 
 **Files:**
 - Modify: `libs/musicum-core/src/services/sync_service.rs`
 
-**`count_audio_files`** — take `files_dir` instead of `library_dir`:
+**1. Update imports** — remove `collection`, `preset`; keep `collection_clip` (used in `delete_file_cascade`):
 ```rust
+// Replace:
+use crate::db::entities::{clip, collection, collection_clip, file, file_attachment, file_metadata, preset};
+use crate::sidecar::{self, ClipSidecar, FileSidecar};
+
+// With:
+use crate::db::entities::{clip, collection_clip, file, file_attachment, file_metadata};
+use crate::sidecar::{self, ClipSidecar, FileSidecar};
+```
+
+**2. Update `count_audio_files`** — takes `files_dir: &Path`; skip dot-dirs and `catalog`:
+```rust
+// Replace entire function:
 pub fn count_audio_files(files_dir: &Path) -> Result<usize, ServiceError> {
     let count = WalkDir::new(files_dir)
-        // remove the .musicum skip — replace with dot-dir skip:
         .follow_links(false)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
             let p = e.path();
-            // skip dot-prefixed directories and catalog/
             if p.is_dir() {
                 let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 if name.starts_with('.') || name == "catalog" { return false; }
@@ -351,79 +323,211 @@ pub fn count_audio_files(files_dir: &Path) -> Result<usize, ServiceError> {
 }
 ```
 
-**`sync_library`** — take `paths: &LibraryPaths`:
+**3. Update `SyncReport`** — drop preset fields:
 ```rust
+// Replace:
+pub struct SyncReport {
+    pub files_added:      Vec<String>,
+    pub files_updated:    Vec<String>,
+    pub files_removed:    Vec<String>,
+    pub sidecars_updated: Vec<String>,
+    pub presets_added:    Vec<String>,
+    pub presets_updated:  Vec<String>,
+}
+
+// With:
+pub struct SyncReport {
+    pub files_added:      Vec<String>,
+    pub files_updated:    Vec<String>,
+    pub files_removed:    Vec<String>,
+    pub sidecars_updated: Vec<String>,
+}
+```
+
+**4. Update `sync_library` signature and body**:
+```rust
+// Replace signature and lib_path line:
 pub async fn sync_library(
     db: &DatabaseConnection,
     paths: &crate::config::LibraryPaths,
     on_progress: impl Fn(),
 ) -> Result<SyncReport, ServiceError> {
     let lib_path = &paths.files_dir;
-    // ... walk lib_path ...
-    // Replace .musicum skip with dot-dir + catalog skip (same filter as count_audio_files)
-    // ...
-    // sync_collections and sync_presets now take catalog_dir:
-    sync_collections(db, &paths.catalog_dir).await?;
-    sync_presets(db, &paths.catalog_dir, &mut report).await?;
-    Ok(report)
-}
 ```
 
-Also update `sync_collections` and `sync_presets` signatures from `library_dir: &Path` to `catalog_dir: &Path`:
+Replace the `.musicum` skip inside the walker:
 ```rust
-async fn sync_collections(db: &DatabaseConnection, catalog_dir: &Path) -> Result<(), ServiceError> {
-    let sidecars = sidecar::read_collection_sidecars(catalog_dir)?;
-    // rest unchanged
+// Replace:
+if path.components().any(|c| c.as_os_str() == ".musicum") {
+    continue;
 }
 
-async fn sync_presets(db: &DatabaseConnection, catalog_dir: &Path, report: &mut SyncReport) -> Result<(), ServiceError> {
-    let sidecars = sidecar::read_preset_sidecars(catalog_dir)?;
-    // rest unchanged
+// With:
+if path.is_dir() {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name.starts_with('.') || name == "catalog" { continue; }
 }
 ```
+
+Remove the two lines at the end of `sync_library` that call `sync_collections` and `sync_presets`:
+```rust
+// Delete these two lines:
+sync_collections(db, lib_path).await?;
+sync_presets(db, lib_path, &mut report).await?;
+```
+
+**5. Delete `sync_collections` and `sync_presets` functions entirely** — remove both async functions.
 
 ---
 
-## Task 8: Update `preset_service`
+## Task 7: Rewrite `preset_service.rs` as DB-only
 
 **Files:**
 - Modify: `libs/musicum-core/src/services/preset_service.rs`
 
-Changes:
-- `create_preset(db, catalog_dir: &Path, ...)` — remove `lib.join(".musicum").join("presets")` path construction; just call `sidecar::write_preset_sidecar(catalog_dir, &sc)` directly (sidecar now handles the subdir internally)
-- Also remove the manual `sidecar_path` construction for the exists-check: use `catalog_dir.join("presets").join(format!("{slug}.musicum-preset.json"))` directly
-- `delete_preset(db, catalog_dir: &Path, ...)` — same pattern
-- `set_processor_param(db, catalog_dir: &Path, ...)` — replace `Path::new(library_dir)` with `catalog_dir`
-- `update_preset_processors_full(db, catalog_dir: &Path, ...)` — replace `Path::new(library_dir)` with `catalog_dir`
-- `update_preset_processors(db, slug, processors)` — **remove** the `library_dir` parameter entirely (it was already `_library_dir` — unused)
-
-Full updated signatures:
+**1. Update imports**:
 ```rust
-pub async fn create_preset(db, catalog_dir: &Path, slug, title, description) -> Result<preset::Model, ServiceError>
-pub async fn delete_preset(db, catalog_dir: &Path, slug) -> Result<(), ServiceError>
-pub async fn set_processor_param(db, catalog_dir: &Path, preset_slug, instance_uuid, key, value) -> Result<(), ServiceError>
-pub async fn update_preset_processors_full(db, catalog_dir: &Path, slug, processors) -> Result<(), ServiceError>
-pub async fn update_preset_processors(db, slug, processors) -> Result<(), ServiceError>
+// Replace:
+use std::path::Path;
+use crate::sidecar::{self, PresetSidecar};
+
+// With:
+use crate::sidecar;
 ```
 
-Inside `set_processor_param` and `update_preset_processors_full`, the internal call to `update_preset_processors` loses the `library_dir` argument:
+**2. Replace `create_preset`** — check DB for duplicates, no sidecar:
 ```rust
-// old:
-update_preset_processors(db, library_dir, preset_slug, sc.processors).await
-// new:
-update_preset_processors(db, preset_slug, sc.processors).await
+pub async fn create_preset(
+    db: &DatabaseConnection,
+    slug: &str,
+    title: &str,
+    description: &str,
+) -> Result<preset::Model, ServiceError> {
+    if preset::Entity::find()
+        .filter(preset::Column::Slug.eq(slug))
+        .one(db)
+        .await?
+        .is_some()
+    {
+        return Err(ServiceError::InvalidInput(format!(
+            "preset '{slug}' already exists"
+        )));
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let model = preset::ActiveModel {
+        id:          Set(Uuid::new_v4().to_string()),
+        slug:        Set(slug.to_string()),
+        title:       Set(title.to_string()),
+        description: Set(description.to_string()),
+        processors:  Set("[]".to_string()),
+        created_at:  Set(now.clone()),
+        updated_at:  Set(now),
+    }
+    .insert(db)
+    .await?;
+
+    Ok(model)
+}
+```
+
+**3. Replace `delete_preset`** — DB only, no sidecar:
+```rust
+pub async fn delete_preset(
+    db: &DatabaseConnection,
+    slug: &str,
+) -> Result<(), ServiceError> {
+    let model = get_preset_by_slug(db, slug).await?;
+    preset::Entity::delete_by_id(model.id).exec(db).await?;
+    Ok(())
+}
+```
+
+**4. Replace `set_processor_param`** — read processors from DB:
+```rust
+pub async fn set_processor_param(
+    db: &DatabaseConnection,
+    preset_slug: &str,
+    instance_uuid: &str,
+    key: &str,
+    value: serde_json::Value,
+) -> Result<(), ServiceError> {
+    let model = get_preset_by_slug(db, preset_slug).await?;
+    let mut processors: Vec<sidecar::ProcessorEntry> =
+        serde_json::from_str(&model.processors)
+            .map_err(|e| ServiceError::InvalidInput(format!("invalid processors JSON: {e}")))?;
+
+    let found = processors.iter_mut().find(|e| {
+        let id = match e {
+            sidecar::ProcessorEntry::Structural { id, .. } => id.as_str(),
+            sidecar::ProcessorEntry::AudioPlugin { id, .. } => id.as_str(),
+        };
+        id == instance_uuid
+    });
+
+    let entry = found.ok_or_else(|| {
+        ServiceError::NotFound(format!("processor '{instance_uuid}' in preset '{preset_slug}'"))
+    })?;
+
+    let params = match entry {
+        sidecar::ProcessorEntry::Structural { processor, .. } => &mut processor.params,
+        sidecar::ProcessorEntry::AudioPlugin { processor, .. } => &mut processor.params,
+    };
+    if let Some(map) = params.as_object_mut() {
+        map.insert(key.to_string(), value);
+    }
+
+    update_preset_processors(db, preset_slug, processors).await
+}
+```
+
+**5. Replace `update_preset_processors_full`** — delegate directly to `update_preset_processors`:
+```rust
+pub async fn update_preset_processors_full(
+    db: &DatabaseConnection,
+    slug: &str,
+    processors: Vec<sidecar::ProcessorEntry>,
+) -> Result<(), ServiceError> {
+    update_preset_processors(db, slug, processors).await
+}
+```
+
+**6. Remove `_library_dir` param from `update_preset_processors`**:
+```rust
+// Replace signature:
+pub async fn update_preset_processors(
+    db: &DatabaseConnection,
+    _library_dir: &str,
+    slug: &str,
+    processors: Vec<sidecar::ProcessorEntry>,
+) -> Result<(), ServiceError> {
+
+// With:
+pub async fn update_preset_processors(
+    db: &DatabaseConnection,
+    slug: &str,
+    processors: Vec<sidecar::ProcessorEntry>,
+) -> Result<(), ServiceError> {
 ```
 
 ---
 
-## Task 9: Drop unused `library_dir` from `clip_service::update_clip_processors`
+## Task 8: Drop `_library_dir` from `clip_service.rs`
 
 **Files:**
 - Modify: `libs/musicum-core/src/services/clip_service.rs`
 
-The parameter `_library_dir: &str` in `update_clip_processors` is already unused (the function uses `file.path` directly). Remove it:
-
+Replace the `update_clip_processors` signature:
 ```rust
+// Replace:
+pub async fn update_clip_processors(
+    db: &DatabaseConnection,
+    _library_dir: &str,
+    clip_slug: &str,
+    processors: Vec<ProcessorEntry>,
+) -> Result<(), ServiceError> {
+
+// With:
 pub async fn update_clip_processors(
     db: &DatabaseConnection,
     clip_slug: &str,
@@ -431,18 +535,21 @@ pub async fn update_clip_processors(
 ) -> Result<(), ServiceError> {
 ```
 
+Run:
+```
+cargo build -p musicum-core
+```
+Expected: clean build. Any remaining errors are in the test files.
+
 ---
 
-## Task 10: Update test helper `common/mod.rs`
+## Task 9: Add `make_paths` helper to `tests/common/mod.rs`
 
 **Files:**
 - Modify: `libs/musicum-core/tests/common/mod.rs`
 
-Add at the bottom:
+Append at the bottom of the file:
 ```rust
-/// Create the standard library subdirectory layout under `base` and return
-/// a `LibraryPaths` pointing at them. Suitable for use in tests as a drop-in
-/// for the old bare `dir.path()` pattern.
 pub fn make_paths(base: &std::path::Path) -> musicum_core::config::LibraryPaths {
     let files_dir     = base.join("files");
     let catalog_dir   = base.join("catalog");
@@ -461,51 +568,232 @@ pub fn make_paths(base: &std::path::Path) -> musicum_core::config::LibraryPaths 
 
 ---
 
-## Task 11: Update `tests/sync_service.rs`
+## Task 10: Rewrite `tests/sync_service.rs`
 
 **Files:**
 - Modify: `libs/musicum-core/tests/sync_service.rs`
 
-Key changes throughout the file:
+Replace the entire file with:
 
-1. `setup(lib_path)` becomes:
 ```rust
+mod common;
+
+use musicum_core::{db, sidecar, services::sync_service};
+use musicum_core::db::entities::{clip, file};
+use sea_orm::{EntityTrait, PaginatorTrait};
+use tempfile::tempdir;
+
 async fn setup(paths: &musicum_core::config::LibraryPaths) -> sea_orm::DatabaseConnection {
     db::connect(&paths.catalog_dir).await.unwrap()
 }
+
+#[tokio::test]
+async fn sync_discovers_wav_file() {
+    let dir = tempdir().unwrap();
+    let paths = common::make_paths(dir.path());
+    let wav = paths.files_dir.join("kick.wav");
+    common::write_sine_wav(&wav, 0.5);
+
+    let db = setup(&paths).await;
+    let stats = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+
+    assert_eq!(stats.files_added.len(), 1, "should have found one new file");
+    assert!(stats.files_removed.is_empty());
+
+    let files = file::Entity::find().all(&db).await.unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].name, "kick");
+    assert_eq!(files[0].channels, 1);
+    assert_eq!(files[0].sample_rate, 44100);
+    assert!(files[0].duration > 0.4 && files[0].duration < 0.6);
+}
+
+#[tokio::test]
+async fn sync_creates_sidecar_next_to_audio() {
+    let dir = tempdir().unwrap();
+    let paths = common::make_paths(dir.path());
+    let wav = paths.files_dir.join("pad.wav");
+    common::write_stereo_wav(&wav, 1.0);
+
+    let db = setup(&paths).await;
+    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+
+    let sidecar_path = paths.files_dir.join("pad.wav.musicum.json");
+    assert!(sidecar_path.exists(), "sidecar should be created next to audio file");
+
+    let sc = sidecar::read_file_sidecar(&wav).unwrap();
+    assert_eq!(sc.version, 1);
+    assert!(sc.clips.is_empty());
+}
+
+#[tokio::test]
+async fn sync_reads_existing_sidecar_with_clips() {
+    let dir = tempdir().unwrap();
+    let paths = common::make_paths(dir.path());
+    let wav = paths.files_dir.join("synth.wav");
+    common::write_sine_wav(&wav, 2.0);
+
+    let sidecar_path = sidecar::sidecar_path_for_audio(&wav);
+    let sc = sidecar::FileSidecar {
+        version: 1,
+        metadata: sidecar::FileMetadataSidecar {
+            bpm: Some(120.0),
+            key: Some("C".into()),
+            rating: Some(5),
+            color: None,
+            notes: "test note".into(),
+            tags: "synth,pad".into(),
+        },
+        attachments: vec![],
+        clips: vec![sidecar::ClipSidecar {
+            slug: "synth-clean".into(),
+            title: "Clean".into(),
+            notes: String::new(),
+            processors: vec![],
+        }],
+    };
+    std::fs::write(&sidecar_path, serde_json::to_string_pretty(&sc).unwrap()).unwrap();
+
+    let db = setup(&paths).await;
+    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+
+    let files = file::Entity::find().all(&db).await.unwrap();
+    assert_eq!(files.len(), 1);
+
+    let clips = clip::Entity::find().all(&db).await.unwrap();
+    assert_eq!(clips.len(), 1);
+    assert_eq!(clips[0].slug, "synth-clean");
+
+    let meta = musicum_core::db::entities::file_metadata::Entity::find_by_id(&files[0].id)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(meta.bpm, Some(120.0));
+    assert_eq!(meta.tags, "synth,pad");
+}
+
+#[tokio::test]
+async fn sync_idempotent_on_unchanged_file() {
+    let dir = tempdir().unwrap();
+    let paths = common::make_paths(dir.path());
+    let wav = paths.files_dir.join("loop.wav");
+    common::write_sine_wav(&wav, 1.0);
+
+    let db = setup(&paths).await;
+
+    let s1 = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    assert_eq!(s1.files_added.len(), 1);
+
+    let s2 = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    assert!(s2.files_added.is_empty(), "no new files on second sync");
+    assert!(s2.files_updated.is_empty());
+    assert!(s2.files_removed.is_empty());
+
+    assert_eq!(file::Entity::find().count(&db).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn sync_detects_removed_files() {
+    let dir = tempdir().unwrap();
+    let paths = common::make_paths(dir.path());
+    let wav = paths.files_dir.join("temp.wav");
+    common::write_sine_wav(&wav, 0.3);
+
+    let db = setup(&paths).await;
+    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    assert_eq!(file::Entity::find().count(&db).await.unwrap(), 1);
+
+    std::fs::remove_file(&wav).unwrap();
+
+    let s2 = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    assert_eq!(s2.files_removed.len(), 1);
+    assert_eq!(file::Entity::find().count(&db).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn sync_walks_subdirectories() {
+    let dir = tempdir().unwrap();
+    let paths = common::make_paths(dir.path());
+    std::fs::create_dir(paths.files_dir.join("drums")).unwrap();
+    common::write_sine_wav(&paths.files_dir.join("drums").join("kick.wav"), 0.1);
+    common::write_sine_wav(&paths.files_dir.join("drums").join("snare.wav"), 0.1);
+    common::write_sine_wav(&paths.files_dir.join("pad.wav"), 1.0);
+
+    let db = setup(&paths).await;
+    let stats = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+
+    assert_eq!(stats.files_added.len(), 3, "should find files in subdirectories too");
+}
+
+#[tokio::test]
+async fn sync_picks_up_sidecar_metadata_when_audio_unchanged() {
+    let dir = tempdir().unwrap();
+    let paths = common::make_paths(dir.path());
+    let wav = paths.files_dir.join("bass.wav");
+    common::write_sine_wav(&wav, 1.0);
+
+    let db = setup(&paths).await;
+    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+
+    let sidecar_path = sidecar::sidecar_path_for_audio(&wav);
+    let mut sc = sidecar::read_file_sidecar(&wav).unwrap();
+    sc.metadata.bpm = Some(140.0);
+    sc.metadata.key = Some("Am".into());
+    std::fs::write(&sidecar_path, serde_json::to_string_pretty(&sc).unwrap()).unwrap();
+
+    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+
+    let files = musicum_core::db::entities::file::Entity::find()
+        .all(&db).await.unwrap();
+    let meta = musicum_core::db::entities::file_metadata::Entity::find_by_id(&files[0].id)
+        .one(&db).await.unwrap().unwrap();
+    assert_eq!(meta.bpm, Some(140.0));
+    assert_eq!(meta.key.as_deref(), Some("Am"));
+}
+
+#[tokio::test]
+async fn report_tracks_sidecar_metadata_update() {
+    let dir = tempdir().unwrap();
+    let paths = common::make_paths(dir.path());
+    let wav = paths.files_dir.join("bass.wav");
+    common::write_sine_wav(&wav, 1.0);
+
+    let db = setup(&paths).await;
+    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+
+    let mut sc = sidecar::read_file_sidecar(&wav).unwrap();
+    sc.metadata.bpm = Some(140.0);
+    let sidecar_path = sidecar::sidecar_path_for_audio(&wav);
+    std::fs::write(&sidecar_path, serde_json::to_string_pretty(&sc).unwrap()).unwrap();
+
+    let report = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+
+    assert_eq!(report.sidecars_updated, vec!["bass"]);
+    assert!(report.files_added.is_empty());
+    assert!(report.files_updated.is_empty());
+}
+
+#[tokio::test]
+async fn report_sidecar_unchanged_is_silent() {
+    let dir = tempdir().unwrap();
+    let paths = common::make_paths(dir.path());
+    let wav = paths.files_dir.join("pad.wav");
+    common::write_sine_wav(&wav, 1.0);
+
+    let db = setup(&paths).await;
+    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+
+    let report = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+
+    assert!(report.sidecars_updated.is_empty());
+    assert!(report.files_added.is_empty());
+}
 ```
 
-2. Every test that previously did:
-```rust
-let dir = tempdir().unwrap();
-let wav = dir.path().join("kick.wav");
-// ...
-let db = setup(dir.path()).await;
-sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ()).await.unwrap();
-```
-becomes:
-```rust
-let dir = tempdir().unwrap();
-let paths = common::make_paths(dir.path());
-let wav = paths.files_dir.join("kick.wav");
-// ...
-let db = setup(&paths).await;
-sync_service::sync_library(&db, &paths, || ()).await.unwrap();
-```
+Note: `sync_preset_sidecar`, `sync_picks_up_updated_preset_sidecar`, and `report_tracks_preset_added_and_updated` are deleted — presets no longer participate in sync.
 
-3. Tests that call `sidecar::write_preset_sidecar(dir.path(), ...)` change to `sidecar::write_preset_sidecar(&paths.catalog_dir, ...)`.
-
-4. `count_audio_files` calls change to `sync_service::count_audio_files(&paths.files_dir)`.
-
-5. Subdirectory test (`sync_walks_subdirectories`) — create dirs inside `paths.files_dir`:
-```rust
-std::fs::create_dir(paths.files_dir.join("drums")).unwrap();
-common::write_sine_wav(&paths.files_dir.join("drums").join("kick.wav"), 0.1);
-common::write_sine_wav(&paths.files_dir.join("drums").join("snare.wav"), 0.1);
-common::write_sine_wav(&paths.files_dir.join("pad.wav"), 1.0);
-```
-
-Run after changes:
+Run:
 ```
 cargo test -p musicum-core sync_service
 ```
@@ -513,12 +801,12 @@ Expected: all tests pass.
 
 ---
 
-## Task 12: Update `tests/clip_service.rs`
+## Task 11: Update `tests/clip_service.rs`
 
 **Files:**
 - Modify: `libs/musicum-core/tests/clip_service.rs`
 
-`setup_with_file` changes:
+Replace `setup_with_file`:
 ```rust
 async fn setup_with_file(paths: &musicum_core::config::LibraryPaths, filename: &str) -> sea_orm::DatabaseConnection {
     let wav = paths.files_dir.join(filename);
@@ -529,13 +817,7 @@ async fn setup_with_file(paths: &musicum_core::config::LibraryPaths, filename: &
 }
 ```
 
-Every test that previously did:
-```rust
-let dir = tempdir().unwrap();
-let db = setup_with_file(dir.path(), "kick.wav").await;
-let wav = dir.path().join("kick.wav");
-```
-becomes:
+In `create_clip_adds_to_db_and_sidecar`:
 ```rust
 let dir = tempdir().unwrap();
 let paths = common::make_paths(dir.path());
@@ -543,7 +825,23 @@ let db = setup_with_file(&paths, "kick.wav").await;
 let wav = paths.files_dir.join("kick.wav");
 ```
 
-Also fix the `create_clip_slug_collision` test — the wav and sidecar setup moves to `paths.files_dir`, and the `db::connect` call uses `paths.catalog_dir`.
+In `create_clip_file_not_found`:
+```rust
+let dir = tempdir().unwrap();
+let paths = common::make_paths(dir.path());
+let db = db::connect(&paths.catalog_dir).await.unwrap();
+```
+
+In `create_clip_slug_collision`:
+```rust
+let dir = tempdir().unwrap();
+let paths = common::make_paths(dir.path());
+let wav = paths.files_dir.join("pad.wav");
+common::write_sine_wav(&wav, 0.5);
+// (write sidecar to wav as before)
+let db = db::connect(&paths.catalog_dir).await.unwrap();
+sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+```
 
 Run:
 ```
@@ -553,168 +851,354 @@ Expected: all tests pass.
 
 ---
 
-## Task 13: Update `tests/preset_service.rs`
+## Task 12: Rewrite `tests/preset_service.rs`
 
 **Files:**
 - Modify: `libs/musicum-core/tests/preset_service.rs`
 
-`setup()` changes:
+Replace the entire file with:
+
 ```rust
-async fn setup() -> (sea_orm::DatabaseConnection, tempfile::TempDir, musicum_core::config::LibraryPaths) {
-    let dir = tempdir().unwrap();
-    let paths = common::make_paths(dir.path());
-    let db = db::connect(&paths.catalog_dir).await.unwrap();
-    (db, dir, paths)
+mod common;
+
+use musicum_core::{db, sidecar::{ProcessorEntry, ProcessorRef}, services::preset_service};
+
+async fn setup() -> sea_orm::DatabaseConnection {
+    db::test_db().await
 }
-```
 
-Every test updates accordingly — e.g.:
-```rust
-// old:
-let (db, dir) = setup().await;
-let lib = dir.path().to_str().unwrap();
-preset_service::create_preset(&db, lib, "my-preset", "My Preset", "").await.unwrap();
-let sc = sidecar::read_preset_sidecar(dir.path(), "my-preset").unwrap();
+#[tokio::test]
+async fn create_preset_writes_db() {
+    let db = setup().await;
 
-// new:
-let (db, _dir, paths) = setup().await;
-preset_service::create_preset(&db, &paths.catalog_dir, "my-preset", "My Preset", "").await.unwrap();
-let sc = sidecar::read_preset_sidecar(&paths.catalog_dir, "my-preset").unwrap();
-```
+    let model = preset_service::create_preset(&db, "my-preset", "My Preset", "").await.unwrap();
 
-Also update `update_preset_processors` call — remove the `lib` argument:
-```rust
-// old:
-preset_service::update_preset_processors(&db, lib, "p1", processors).await.unwrap();
-// new:
-preset_service::update_preset_processors(&db, "p1", processors).await.unwrap();
+    assert_eq!(model.slug, "my-preset");
+    assert_eq!(model.title, "My Preset");
+    assert_eq!(model.processors, "[]");
+}
+
+#[tokio::test]
+async fn create_preset_errors_if_slug_exists() {
+    let db = setup().await;
+
+    preset_service::create_preset(&db, "dup", "Dup", "").await.unwrap();
+    let err = preset_service::create_preset(&db, "dup", "Dup", "").await.unwrap_err();
+    assert!(matches!(err, musicum_core::ServiceError::InvalidInput(_)));
+}
+
+#[tokio::test]
+async fn delete_preset_removes_db_row() {
+    let db = setup().await;
+
+    preset_service::create_preset(&db, "gone", "Gone", "").await.unwrap();
+    preset_service::delete_preset(&db, "gone").await.unwrap();
+
+    let err = preset_service::get_preset_by_slug(&db, "gone").await.unwrap_err();
+    assert!(matches!(err, musicum_core::ServiceError::NotFound(_)));
+}
+
+#[tokio::test]
+async fn update_preset_processors_persists_to_db() {
+    let db = setup().await;
+
+    preset_service::create_preset(&db, "p1", "P1", "").await.unwrap();
+
+    let processors = vec![ProcessorEntry::Structural {
+        id: "uuid-abc".into(),
+        enabled: true,
+        processor: ProcessorRef {
+            id: "trim".into(),
+            params: serde_json::json!({ "start": 0.0, "end": 0.0 }),
+        },
+    }];
+
+    preset_service::update_preset_processors(&db, "p1", processors).await.unwrap();
+
+    let model = preset_service::get_preset_by_slug(&db, "p1").await.unwrap();
+    assert!(model.processors.contains("trim"));
+}
 ```
 
 Run:
 ```
 cargo test -p musicum-core preset_service
 ```
-Expected: all tests pass.
+Expected: all 4 tests pass.
 
 ---
 
-## Task 14: Run full core test suite
+## Task 13: Run full core test suite
 
 ```
 cargo test -p musicum-core
 ```
-Expected: all tests pass, zero warnings from changed code.
+Expected: all tests pass, zero warnings in changed code.
 
 ---
 
-## Task 15: Delete `apps/cli/src/settings.rs`
+## Task 14: Delete `apps/cli/src/settings.rs`
 
-Simply delete the file. The compiler will flag all usages in the next step.
+Delete the file:
+```
+rm apps/cli/src/settings.rs
+```
+
+The compiler will flag usages in `main.rs` — fix in the next task.
 
 ---
 
-## Task 16: Update `apps/cli/src/main.rs`
+## Task 15: Update `apps/cli/src/main.rs`
 
 **Files:**
 - Modify: `apps/cli/src/main.rs`
 
-Remove:
-```rust
-mod settings;
-```
+Replace the entire file with:
 
-Replace settings usage:
 ```rust
+mod commands;
+mod output;
+
+use anyhow::Result;
+use clap::{Parser, Subcommand};
 use musicum_core::config::{self, LibraryPaths};
 
-// In main():
-let paths = if let Some(lib) = cli.library {
-    LibraryPaths::from_override(&lib)
-} else {
-    let settings = config::load()?;
-    settings.library_paths()
-};
+#[derive(Parser)]
+#[command(
+    name = "musicum",
+    about = "Musicum audio library CLI",
+    version
+)]
+struct Cli {
+    /// Override the library directory for this invocation
+    #[arg(long, global = true)]
+    library: Option<String>,
 
-// Config command:
-if let Commands::Config = cli.command {
-    println!("Config file:   {}", config::config_path().display());
-    println!("Library dir:   {}", paths.library_dir.display());
-    println!("Files dir:     {}", paths.files_dir.display());
-    println!("Catalog dir:   {}", paths.catalog_dir.display());
-    println!("Generated dir: {}", paths.generated_dir.display());
-    return Ok(());
+    #[command(subcommand)]
+    command: Commands,
 }
 
-// DB connect:
-let db = musicum_core::db::connect(&paths.catalog_dir).await?;
+#[derive(Subcommand)]
+enum Commands {
+    /// Walk the library directory and sync DB + sidecars
+    Sync,
+    /// File operations
+    Files(commands::files::FilesArgs),
+    /// Clip operations
+    Clips(commands::clips::ClipsArgs),
+    /// Collection operations
+    Collections(commands::collections::CollectionsArgs),
+    /// Preset operations
+    Presets(commands::presets::PresetsArgs),
+    /// List registered structural processors
+    Processors(commands::processors::ProcessorsArgs),
+    /// Play a file or clip (slug or file path)
+    Play {
+        /// Slug or file path to play
+        target: String,
+        /// Resolve target as a file slug (skips clip lookup)
+        #[arg(long, conflicts_with = "clip")]
+        file: bool,
+        /// Resolve target as a clip slug (skips file lookup)
+        #[arg(long, conflicts_with = "file")]
+        clip: bool,
+        /// Start playback with looping enabled
+        #[arg(long = "loop")]
+        loop_mode: bool,
+    },
+    /// Print config and resolved library paths
+    Config,
+}
 
-// Command dispatch — pass &paths where library_dir was passed:
-Commands::Sync              => commands::sync::run(&db, &paths).await?,
-Commands::Clips(args)       => commands::clips::run(&db, args).await?,
-Commands::Collections(args) => commands::collections::run(&db, args).await?,
-Commands::Presets(args)     => commands::presets::run(&db, &paths.catalog_dir, args).await?,
-// ... others unchanged
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    let paths = if let Some(lib) = cli.library {
+        LibraryPaths::from_override(&lib)
+    } else {
+        config::load()?.library_paths()
+    };
+
+    if let Commands::Config = cli.command {
+        println!("Config file:   {}", config::config_path().display());
+        println!("Library dir:   {}", paths.library_dir.display());
+        println!("Files dir:     {}", paths.files_dir.display());
+        println!("Catalog dir:   {}", paths.catalog_dir.display());
+        println!("Generated dir: {}", paths.generated_dir.display());
+        return Ok(());
+    }
+
+    let db = musicum_core::db::connect(&paths.catalog_dir).await?;
+
+    match cli.command {
+        Commands::Sync              => commands::sync::run(&db, &paths).await?,
+        Commands::Files(args)       => commands::files::run(&db, args).await?,
+        Commands::Clips(args)       => commands::clips::run(&db, args).await?,
+        Commands::Collections(args) => commands::collections::run(&db, args).await?,
+        Commands::Presets(args)     => commands::presets::run(&db, &paths.catalog_dir, args).await?,
+        Commands::Processors(args)  => commands::processors::run(args),
+        Commands::Play { target, file, clip, loop_mode } => {
+            commands::play::run(&db, target, file, clip, loop_mode).await?
+        }
+        Commands::Config => unreachable!(),
+    }
+
+    Ok(())
+}
 ```
 
 ---
 
-## Task 17: Update `apps/cli/src/commands/sync.rs`
+## Task 16: Update `apps/cli/src/commands/sync.rs`
 
 **Files:**
 - Modify: `apps/cli/src/commands/sync.rs`
 
-Change signature and usage:
+Replace the entire file with:
+
 ```rust
+use anyhow::Result;
+use indicatif::{ProgressBar, ProgressStyle};
 use musicum_core::config::LibraryPaths;
+use musicum_core::services::sync_service;
+use sea_orm::DatabaseConnection;
 
 pub async fn run(db: &DatabaseConnection, paths: &LibraryPaths) -> Result<()> {
     println!("Syncing library: {}", paths.library_dir.display());
 
     let total = sync_service::count_audio_files(&paths.files_dir).unwrap_or(0);
-    // ...
+
+    let pb = if total > 0 {
+        let bar = ProgressBar::new(total as u64);
+        bar.set_style(
+            ProgressStyle::with_template(
+                "  {bar:40.cyan/blue} {pos}/{len}  {elapsed_precise}"
+            )
+            .unwrap()
+            .progress_chars("█▉▊▋▌▍▎▏  "),
+        );
+        bar
+    } else {
+        let bar = ProgressBar::new_spinner();
+        bar.set_style(
+            ProgressStyle::with_template("  {spinner:.cyan} scanning…  {elapsed_precise}")
+                .unwrap(),
+        );
+        bar
+    };
+
+    let pb_tick = pb.clone();
     let report = sync_service::sync_library(db, paths, move || pb_tick.inc(1)).await?;
-    // rest unchanged
+
+    pb.finish_and_clear();
+
+    for name in &report.files_removed    { println!("  [removed] {name}"); }
+    for name in &report.files_updated    { println!("  [updated] {name}"); }
+    for name in &report.files_added      { println!("  [new]     {name}"); }
+    for name in &report.sidecars_updated { println!("  [sidecar] {name}"); }
+
+    let fa = report.files_added.len();
+    let fu = report.files_updated.len();
+    let fr = report.files_removed.len();
+    let su = report.sidecars_updated.len();
+
+    let mut parts: Vec<String> = Vec::new();
+    if fa > 0 { parts.push(format!("{fa} added")); }
+    if fu > 0 { parts.push(format!("{fu} updated")); }
+    if fr > 0 { parts.push(format!("{fr} removed")); }
+    if su > 0 { parts.push(format!("{su} sidecar")); }
+
+    if parts.is_empty() {
+        println!("Done — nothing changed");
+    } else {
+        println!("Done — {}", parts.join(", "));
+    }
+
+    Ok(())
+}
 ```
 
 ---
 
-## Task 18: Update `apps/cli/src/commands/presets.rs` and `presets_editor.rs`
+## Task 17: Update `apps/cli/src/commands/presets.rs`
 
 **Files:**
 - Modify: `apps/cli/src/commands/presets.rs`
+
+Key changes:
+- Signature: `library_dir: &str` → `catalog_dir: &std::path::Path`
+- Remove `use std::path::Path;`
+- Change `use musicum_core::sidecar::{self, ProcessorEntry, ProcessorRef};` → `use musicum_core::sidecar::{ProcessorEntry, ProcessorRef};`
+- `Create`: `create_preset(db, library_dir, ...)` → `create_preset(db, ...)`
+- `Delete`: `delete_preset(db, library_dir, ...)` → `delete_preset(db, ...)`
+- `AddProcessor`: replace sidecar read/write with DB read/write (see below)
+- `RemoveProcessor`: replace sidecar read/write with DB read/write (see below)
+- `Edit`: `run_editor(db, library_dir, &slug)` → `run_editor(db, &slug)`
+- `SetParam`: `set_processor_param(db, library_dir, ...)` → `set_processor_param(db, ...)`
+- Empty list message: `"No presets. Create one with 'presets create --title <name>'."`
+
+Replace `AddProcessor` match arm body (after building `instance_id` and `new_entry`):
+```rust
+let preset = preset_service::get_preset_by_slug(db, &preset_slug).await?;
+let mut processors: Vec<ProcessorEntry> =
+    serde_json::from_str(&preset.processors).unwrap_or_default();
+processors.push(new_entry);
+preset_service::update_preset_processors(db, &preset_slug, processors).await?;
+```
+
+Replace `RemoveProcessor` match arm body:
+```rust
+let preset = preset_service::get_preset_by_slug(db, &preset_slug).await?;
+let mut processors: Vec<ProcessorEntry> =
+    serde_json::from_str(&preset.processors).unwrap_or_default();
+let original_len = processors.len();
+processors.retain(|e| {
+    let id = match e {
+        ProcessorEntry::Structural { id, .. } => id.as_str(),
+        ProcessorEntry::AudioPlugin { id, .. } => id.as_str(),
+    };
+    id != instance_uuid
+});
+if processors.len() == original_len {
+    bail!("processor '{instance_uuid}' not found in preset '{preset_slug}'");
+}
+preset_service::update_preset_processors(db, &preset_slug, processors).await?;
+```
+
+---
+
+## Task 18: Update `apps/cli/src/commands/presets_editor.rs`
+
+**Files:**
 - Modify: `apps/cli/src/commands/presets_editor.rs`
 
-**`presets.rs`** — change signature:
-```rust
-pub async fn run(db: &DatabaseConnection, catalog_dir: &std::path::Path, args: PresetsArgs) -> Result<()> {
-```
+Replace the entire file with:
 
-Replace every `library_dir` usage with `catalog_dir`. Two patterns:
-- Direct `Path::new(library_dir)` → just use `catalog_dir` directly
-- `preset_service::create_preset(db, library_dir, ...)` → `preset_service::create_preset(db, catalog_dir, ...)`
-- `preset_service::delete_preset(db, library_dir, ...)` → `preset_service::delete_preset(db, catalog_dir, ...)`
-- `sidecar::read_preset_sidecar(lib, ...)` → `sidecar::read_preset_sidecar(catalog_dir, ...)`
-- `sidecar::write_preset_sidecar(lib, ...)` → `sidecar::write_preset_sidecar(catalog_dir, ...)`
-- `preset_service::update_preset_processors(db, library_dir, ...)` → `preset_service::update_preset_processors(db, ...)` (no dir arg)
-- `super::presets_editor::run_editor(db, library_dir, &slug)` → `super::presets_editor::run_editor(db, catalog_dir, &slug)`
-
-Also update the empty-preset message (remove `.musicum/presets/` reference):
 ```rust
-println!("No presets. Add a sidecar under catalog/presets/ and run sync.");
-```
+use anyhow::Result;
+use musicum_core::services::preset_service;
+use sea_orm::DatabaseConnection;
 
-**`presets_editor.rs`** — change signature:
-```rust
+use super::processor_list_editor::{run, SaveFn};
+
 pub async fn run_editor(
     db: &DatabaseConnection,
-    catalog_dir: &std::path::Path,
     preset_slug: &str,
 ) -> Result<()> {
-```
+    let preset = preset_service::get_preset_by_slug(db, preset_slug).await?;
+    let processors = serde_json::from_str(&preset.processors).unwrap_or_default();
 
-Replace `library_dir` with `catalog_dir` in the `update_preset_processors_full` call:
-```rust
-preset_service::update_preset_processors_full(db, catalog_dir, preset_slug, procs)
+    let save: SaveFn<'_> = Box::new(|procs| {
+        Box::pin(async move {
+            preset_service::update_preset_processors_full(db, preset_slug, procs)
+                .await
+                .map_err(anyhow::Error::from)
+        })
+    });
+
+    run(&format!("Preset: {preset_slug}"), processors, save).await
+}
 ```
 
 ---
@@ -724,22 +1208,46 @@ preset_service::update_preset_processors_full(db, catalog_dir, preset_slug, proc
 **Files:**
 - Modify: `apps/cli/src/commands/clips.rs`
 
-`clip_service::update_clip_processors` no longer takes a `library_dir` argument. Update all three call sites:
+Remove `library_dir: &str` from `run` signature:
 ```rust
-// old:
-clip_service::update_clip_processors(db, library_dir, &clip_slug, new_processors).await?;
-// new:
-clip_service::update_clip_processors(db, &clip_slug, new_processors).await?;
+// Replace:
+pub async fn run(db: &DatabaseConnection, library_dir: &str, args: ClipsArgs) -> Result<()> {
+
+// With:
+pub async fn run(db: &DatabaseConnection, args: ClipsArgs) -> Result<()> {
 ```
 
-Since `library_dir` is no longer used in `clips.rs`, remove it from the function signature:
+Update the three `update_clip_processors` calls — remove the `library_dir` argument:
 ```rust
-pub async fn run(db: &DatabaseConnection, args: ClipsArgs) -> Result<()> {
+// ApplyPreset:
+clip_service::update_clip_processors(db, &clip_slug, new_processors).await?;
+
+// ClearProcessors:
+clip_service::update_clip_processors(db, &clip_slug, vec![]).await?;
+
+// Edit (inside the SaveFn closure):
+clip_service::update_clip_processors(db, &slug, procs).await?;
 ```
 
 ---
 
-## Task 20: Final build and lint
+## Task 20: Update `apps/cli/src/commands/collections.rs`
+
+**Files:**
+- Modify: `apps/cli/src/commands/collections.rs`
+
+Replace the empty-list message:
+```rust
+// Replace:
+println!("No collections. Add a sidecar under .musicum/collections/ and run sync.");
+
+// With:
+println!("No collections.");
+```
+
+---
+
+## Task 21: Final build, lint, and smoke test
 
 ```
 cargo clippy --all 2>&1 | head -60
@@ -756,11 +1264,10 @@ cargo build
 ```
 Expected: clean build.
 
-Manual smoke test:
 ```
 cargo run -p musicum-cli -- config
 ```
-Expected output (paths will vary by HOME):
+Expected output (paths vary by HOME):
 ```
 Config file:   /Users/<you>/.musicum/config.toml
 Library dir:   /Users/<you>/Musik/musicum

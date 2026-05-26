@@ -6,19 +6,20 @@ use musicum_core::ServiceError;
 use sea_orm::EntityTrait;
 use tempfile::tempdir;
 
-async fn setup_with_file(lib_path: &std::path::Path, filename: &str) -> sea_orm::DatabaseConnection {
-    let wav = lib_path.join(filename);
+async fn setup_with_file(paths: &musicum_core::config::LibraryPaths, filename: &str) -> sea_orm::DatabaseConnection {
+    let wav = paths.files_dir.join(filename);
     common::write_sine_wav(&wav, 0.5);
-    let db = db::connect(lib_path.to_str().unwrap()).await.unwrap();
-    sync_service::sync_library(&db, lib_path.to_str().unwrap(), || ()).await.unwrap();
+    let db = db::connect(&paths.catalog_dir).await.unwrap();
+    sync_service::sync_library(&db, paths, || ()).await.unwrap();
     db
 }
 
 #[tokio::test]
 async fn create_clip_adds_to_db_and_sidecar() {
     let dir = tempdir().unwrap();
-    let db = setup_with_file(dir.path(), "kick.wav").await;
-    let wav = dir.path().join("kick.wav");
+    let paths = common::make_paths(dir.path());
+    let db = setup_with_file(&paths, "kick.wav").await;
+    let wav = paths.files_dir.join("kick.wav");
 
     let clip = clip_service::create_clip(&db, "kick", "My Clip").await.unwrap();
 
@@ -42,7 +43,8 @@ async fn create_clip_adds_to_db_and_sidecar() {
 #[tokio::test]
 async fn create_clip_file_not_found() {
     let dir = tempdir().unwrap();
-    let db = db::connect(dir.path().to_str().unwrap()).await.unwrap();
+    let paths = common::make_paths(dir.path());
+    let db = db::connect(&paths.catalog_dir).await.unwrap();
 
     let err = clip_service::create_clip(&db, "nonexistent", "Foo").await.unwrap_err();
     assert!(matches!(err, ServiceError::NotFound(_)));
@@ -51,7 +53,8 @@ async fn create_clip_file_not_found() {
 #[tokio::test]
 async fn create_clip_slug_collision() {
     let dir = tempdir().unwrap();
-    let wav = dir.path().join("pad.wav");
+    let paths = common::make_paths(dir.path());
+    let wav = paths.files_dir.join("pad.wav");
     common::write_sine_wav(&wav, 0.5);
 
     // Pre-write sidecar with a clip whose slug would collide
@@ -68,8 +71,8 @@ async fn create_clip_slug_collision() {
     };
     sidecar::write_file_sidecar(&wav, &sc).unwrap();
 
-    let db = db::connect(dir.path().to_str().unwrap()).await.unwrap();
-    sync_service::sync_library(&db, dir.path().to_str().unwrap(), || ()).await.unwrap();
+    let db = db::connect(&paths.catalog_dir).await.unwrap();
+    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
 
     let err = clip_service::create_clip(&db, "pad", "My Clip").await.unwrap_err();
     assert!(matches!(err, ServiceError::InvalidInput(_)));

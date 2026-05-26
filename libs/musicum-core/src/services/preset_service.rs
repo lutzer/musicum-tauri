@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection,
     EntityTrait, QueryFilter, QueryOrder,
@@ -7,7 +5,7 @@ use sea_orm::{
 use uuid::Uuid;
 
 use crate::db::entities::preset;
-use crate::sidecar::{self, PresetSidecar};
+use crate::sidecar;
 use crate::ServiceError;
 
 pub async fn list_presets(db: &DatabaseConnection) -> Result<Vec<preset::Model>, ServiceError> {
@@ -30,30 +28,20 @@ pub async fn get_preset_by_slug(
 
 pub async fn create_preset(
     db: &DatabaseConnection,
-    library_dir: &str,
     slug: &str,
     title: &str,
     description: &str,
 ) -> Result<preset::Model, ServiceError> {
-    let lib = Path::new(library_dir);
-    let sidecar_path = lib
-        .join(".musicum")
-        .join("presets")
-        .join(format!("{slug}.musicum-preset.json"));
-    if sidecar_path.exists() {
+    if preset::Entity::find()
+        .filter(preset::Column::Slug.eq(slug))
+        .one(db)
+        .await?
+        .is_some()
+    {
         return Err(ServiceError::InvalidInput(format!(
             "preset '{slug}' already exists"
         )));
     }
-
-    let sc = PresetSidecar {
-        version: 1,
-        slug: slug.to_string(),
-        title: title.to_string(),
-        description: description.to_string(),
-        processors: vec![],
-    };
-    sidecar::write_preset_sidecar(lib, &sc)?;
 
     let now = chrono::Utc::now().to_rfc3339();
     let model = preset::ActiveModel {
@@ -73,34 +61,26 @@ pub async fn create_preset(
 
 pub async fn delete_preset(
     db: &DatabaseConnection,
-    library_dir: &str,
     slug: &str,
 ) -> Result<(), ServiceError> {
     let model = get_preset_by_slug(db, slug).await?;
-    let lib = Path::new(library_dir);
-    let sidecar_path = lib
-        .join(".musicum")
-        .join("presets")
-        .join(format!("{slug}.musicum-preset.json"));
-    if sidecar_path.exists() {
-        std::fs::remove_file(&sidecar_path)?;
-    }
     preset::Entity::delete_by_id(model.id).exec(db).await?;
     Ok(())
 }
 
 pub async fn set_processor_param(
     db: &DatabaseConnection,
-    library_dir: &str,
     preset_slug: &str,
     instance_uuid: &str,
     key: &str,
     value: serde_json::Value,
 ) -> Result<(), ServiceError> {
-    let lib = Path::new(library_dir);
-    let mut sc = sidecar::read_preset_sidecar(lib, preset_slug)?;
+    let model = get_preset_by_slug(db, preset_slug).await?;
+    let mut processors: Vec<sidecar::ProcessorEntry> =
+        serde_json::from_str(&model.processors)
+            .map_err(|e| ServiceError::InvalidInput(format!("invalid processors JSON: {e}")))?;
 
-    let found = sc.processors.iter_mut().find(|e| {
+    let found = processors.iter_mut().find(|e| {
         let id = match e {
             sidecar::ProcessorEntry::Structural { id, .. } => id.as_str(),
             sidecar::ProcessorEntry::AudioPlugin { id, .. } => id.as_str(),
@@ -120,26 +100,19 @@ pub async fn set_processor_param(
         map.insert(key.to_string(), value);
     }
 
-    sidecar::write_preset_sidecar(lib, &sc)?;
-    update_preset_processors(db, library_dir, preset_slug, sc.processors).await
+    update_preset_processors(db, preset_slug, processors).await
 }
 
 pub async fn update_preset_processors_full(
     db: &DatabaseConnection,
-    library_dir: &str,
     slug: &str,
     processors: Vec<sidecar::ProcessorEntry>,
 ) -> Result<(), ServiceError> {
-    let lib = Path::new(library_dir);
-    let mut sc = sidecar::read_preset_sidecar(lib, slug)?;
-    sc.processors = processors.clone();
-    sidecar::write_preset_sidecar(lib, &sc)?;
-    update_preset_processors(db, library_dir, slug, processors).await
+    update_preset_processors(db, slug, processors).await
 }
 
 pub async fn update_preset_processors(
     db: &DatabaseConnection,
-    _library_dir: &str,
     slug: &str,
     processors: Vec<sidecar::ProcessorEntry>,
 ) -> Result<(), ServiceError> {

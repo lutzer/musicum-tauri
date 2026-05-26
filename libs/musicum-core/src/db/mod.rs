@@ -8,13 +8,10 @@ use sea_orm::{
 use crate::ServiceError;
 use schema::SCHEMA_VERSION;
 
-pub async fn connect(library_dir: &str) -> Result<DatabaseConnection, ServiceError> {
-    let db_path = format!("{library_dir}/.musicum/musicum.db");
-
-    let dir = std::path::Path::new(&db_path).parent().unwrap();
-    std::fs::create_dir_all(dir)?;
-
-    let url = format!("sqlite://{db_path}?mode=rwc");
+pub async fn connect(catalog_dir: &std::path::Path) -> Result<DatabaseConnection, ServiceError> {
+    std::fs::create_dir_all(catalog_dir)?;
+    let db_path = catalog_dir.join("musicum.db");
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
     let db = Database::connect(&url).await?;
 
     // WAL mode for concurrent access (CLI + desktop app can coexist)

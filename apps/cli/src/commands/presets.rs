@@ -1,12 +1,11 @@
 use anyhow::{bail, Result};
 use clap::{Args, Subcommand};
 use musicum_core::services::preset_service;
-use musicum_core::sidecar::{self, ProcessorEntry, ProcessorRef};
+use musicum_core::sidecar::{ProcessorEntry, ProcessorRef};
 use sea_orm::DatabaseConnection;
 use slug::slugify;
 use structural_processor_sdk::processor::ParameterDescriptor;
 use uuid::Uuid;
-use std::path::Path;
 
 use crate::output::{DetailItem::Field, print_detail, print_json, print_result, print_section_header, print_table};
 
@@ -57,14 +56,14 @@ pub enum PresetsCommand {
     },
 }
 
-pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) -> Result<()> {
+pub async fn run(db: &DatabaseConnection, _catalog_dir: &std::path::Path, args: PresetsArgs) -> Result<()> {
     match args.command {
         PresetsCommand::List { json } => {
             let presets = preset_service::list_presets(db).await?;
             if json {
                 print_json(&presets);
             } else if presets.is_empty() {
-                println!("No presets. Add a sidecar under .musicum/presets/ and run sync.");
+                println!("No presets. Create one with 'presets create --title <name>'.");
             } else {
                 print_table(
                     "presets",
@@ -114,7 +113,7 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) 
 
         PresetsCommand::Create { title, description } => {
             let slug = slugify(&title);
-            preset_service::create_preset(db, library_dir, &slug, &title, &description).await?;
+            preset_service::create_preset(db, &slug, &title, &description).await?;
             print_result("Created preset", &[
                 Field("slug", slug.clone()),
                 Field("title", title.clone()),
@@ -124,7 +123,7 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) 
         }
 
         PresetsCommand::Delete { slug } => {
-            preset_service::delete_preset(db, library_dir, &slug).await?;
+            preset_service::delete_preset(db, &slug).await?;
             print_result(&format!("Deleted preset '{slug}'"), &[]);
         }
 
@@ -167,11 +166,11 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) 
                 },
             };
 
-            let lib = Path::new(library_dir);
-            let mut sc = sidecar::read_preset_sidecar(lib, &preset_slug)?;
-            sc.processors.push(new_entry);
-            sidecar::write_preset_sidecar(lib, &sc)?;
-            preset_service::update_preset_processors(db, library_dir, &preset_slug, sc.processors).await?;
+            let preset = preset_service::get_preset_by_slug(db, &preset_slug).await?;
+            let mut processors: Vec<ProcessorEntry> =
+                serde_json::from_str(&preset.processors).unwrap_or_default();
+            processors.push(new_entry);
+            preset_service::update_preset_processors(db, &preset_slug, processors).await?;
 
             print_result("Added processor", &[
                 Field("id", instance_id.clone()),
@@ -181,12 +180,12 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) 
         }
 
         PresetsCommand::Edit { slug } => {
-            super::presets_editor::run_editor(db, library_dir, &slug).await?;
+            super::presets_editor::run_editor(db, &slug).await?;
         }
 
         PresetsCommand::SetParam { preset_slug, instance_uuid, key, value } => {
             let parsed = parse_param_value(&value);
-            preset_service::set_processor_param(db, library_dir, &preset_slug, &instance_uuid, &key, parsed).await?;
+            preset_service::set_processor_param(db, &preset_slug, &instance_uuid, &key, parsed).await?;
             print_result("Set parameter", &[
                 Field("preset", preset_slug.clone()),
                 Field("processor", instance_uuid.clone()),
@@ -196,21 +195,21 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) 
         }
 
         PresetsCommand::RemoveProcessor { preset_slug, instance_uuid } => {
-            let lib = Path::new(library_dir);
-            let mut sc = sidecar::read_preset_sidecar(lib, &preset_slug)?;
-            let original_len = sc.processors.len();
-            sc.processors.retain(|e| {
+            let preset = preset_service::get_preset_by_slug(db, &preset_slug).await?;
+            let mut processors: Vec<ProcessorEntry> =
+                serde_json::from_str(&preset.processors).unwrap_or_default();
+            let original_len = processors.len();
+            processors.retain(|e| {
                 let id = match e {
                     ProcessorEntry::Structural { id, .. } => id.as_str(),
                     ProcessorEntry::AudioPlugin { id, .. } => id.as_str(),
                 };
                 id != instance_uuid
             });
-            if sc.processors.len() == original_len {
+            if processors.len() == original_len {
                 bail!("processor '{instance_uuid}' not found in preset '{preset_slug}'");
             }
-            sidecar::write_preset_sidecar(lib, &sc)?;
-            preset_service::update_preset_processors(db, library_dir, &preset_slug, sc.processors).await?;
+            preset_service::update_preset_processors(db, &preset_slug, processors).await?;
             print_result(&format!("Removed processor '{instance_uuid}'"), &[
                 Field("preset", preset_slug.clone()),
             ]);

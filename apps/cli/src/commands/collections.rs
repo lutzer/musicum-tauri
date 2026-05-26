@@ -31,7 +31,7 @@ pub async fn run(db: &DatabaseConnection, args: CollectionsArgs) -> Result<()> {
             if json {
                 print_json(&cols);
             } else if cols.is_empty() {
-                println!("No collections. Add a sidecar under .musicum/collections/ and run sync.");
+                println!("No collections.");
             } else {
                 print_table(
                     "collections",

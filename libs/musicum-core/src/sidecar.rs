@@ -80,32 +80,6 @@ pub struct ClipSidecar {
     pub processors: Vec<ProcessorEntry>,
 }
 
-// ── Collection sidecar ────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CollectionSidecar {
-    pub version: u32,
-    pub slug: String,
-    pub title: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub clips: Vec<String>,
-}
-
-// ── Preset sidecar ────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PresetSidecar {
-    pub version: u32,
-    pub slug: String,
-    pub title: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub processors: Vec<ProcessorEntry>,
-}
-
 // ── Read/write helpers ────────────────────────────────────────────────────
 
 pub fn read_file_sidecar(audio_path: &Path) -> Result<FileSidecar, ServiceError> {
@@ -135,71 +109,3 @@ pub fn sidecar_path_for_audio(audio_path: &Path) -> std::path::PathBuf {
         .join(format!("{stem}.musicum.json"))
 }
 
-pub fn read_collection_sidecars(library_dir: &Path) -> Result<Vec<CollectionSidecar>, ServiceError> {
-    let dir = library_dir.join(".musicum").join("collections");
-    if !dir.exists() {
-        return Ok(vec![]);
-    }
-    let mut result = vec![];
-    for entry in std::fs::read_dir(&dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            let text = std::fs::read_to_string(&path)?;
-            let sc: CollectionSidecar = serde_json::from_str(&text)?;
-            result.push(sc);
-        }
-    }
-    Ok(result)
-}
-
-pub fn write_collection_sidecar(
-    library_dir: &Path,
-    sc: &CollectionSidecar,
-) -> Result<(), ServiceError> {
-    let dir = library_dir.join(".musicum").join("collections");
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{}.musicum.json", sc.slug));
-    let json = serde_json::to_string_pretty(sc)?;
-    std::fs::write(&path, json)?;
-    Ok(())
-}
-
-pub fn read_preset_sidecars(library_dir: &Path) -> Result<Vec<PresetSidecar>, ServiceError> {
-    let dir = library_dir.join(".musicum").join("presets");
-    if !dir.exists() {
-        return Ok(vec![]);
-    }
-    let mut result = vec![];
-    for entry in std::fs::read_dir(&dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            let text = std::fs::read_to_string(&path)?;
-            let sc: PresetSidecar = serde_json::from_str(&text)?;
-            result.push(sc);
-        }
-    }
-    Ok(result)
-}
-
-pub fn read_preset_sidecar(library_dir: &Path, slug: &str) -> Result<PresetSidecar, ServiceError> {
-    let path = library_dir
-        .join(".musicum")
-        .join("presets")
-        .join(format!("{slug}.musicum-preset.json"));
-    if !path.exists() {
-        return Err(ServiceError::NotFound(format!("preset '{slug}'")));
-    }
-    let text = std::fs::read_to_string(&path)?;
-    Ok(serde_json::from_str(&text)?)
-}
-
-pub fn write_preset_sidecar(library_dir: &Path, sc: &PresetSidecar) -> Result<(), ServiceError> {
-    let dir = library_dir.join(".musicum").join("presets");
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{}.musicum-preset.json", sc.slug));
-    let json = serde_json::to_string_pretty(sc)?;
-    std::fs::write(&path, json)?;
-    Ok(())
-}

@@ -85,7 +85,6 @@ pub async fn create_clip(
 
 pub async fn update_clip_processors(
     db: &DatabaseConnection,
-    _library_dir: &str,
     clip_slug: &str,
     processors: Vec<ProcessorEntry>,
 ) -> Result<(), ServiceError> {

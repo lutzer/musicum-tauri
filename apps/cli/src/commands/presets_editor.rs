@@ -6,7 +6,6 @@ use super::processor_list_editor::{run, SaveFn};
 
 pub async fn run_editor(
     db: &DatabaseConnection,
-    library_dir: &str,
     preset_slug: &str,
 ) -> Result<()> {
     let preset = preset_service::get_preset_by_slug(db, preset_slug).await?;
@@ -14,7 +13,7 @@ pub async fn run_editor(
 
     let save: SaveFn<'_> = Box::new(|procs| {
         Box::pin(async move {
-            preset_service::update_preset_processors_full(db, library_dir, preset_slug, procs)
+            preset_service::update_preset_processors_full(db, preset_slug, procs)
                 .await
                 .map_err(anyhow::Error::from)
         })

@@ -6,6 +6,9 @@ Reorganise the on-disk library layout into explicit subdirectories, introduce a
 TOML config file at `~/.musicum/config.toml`, and move all config/path-resolution
 logic into `musicum-core`.
 
+Collections and presets are **database-only** — they no longer produce sidecar
+files on disk.  Sync touches only audio source files.
+
 ---
 
 ## Config file
@@ -51,12 +54,8 @@ ignored — `LibraryPaths` is constructed purely from the given path.
     synths/
       pad.wav
       pad.musicum.json
-  catalog/                        # queryable index and catalog data
+  catalog/                        # database only
     musicum.db
-    collections/
-      ep-01.musicum.json
-    presets/
-      lo-fi.musicum-preset.json
     attachments/
       <uuid>.<ext>
   .generated/                     # derived/cached data (can be deleted safely)
@@ -68,6 +67,9 @@ ignored — `LibraryPaths` is constructed purely from the given path.
 ```
 
 The previous `<library_dir>/.musicum/` hidden directory is removed entirely.
+
+Collections and presets have no representation on disk — they live exclusively
+in `musicum.db`.
 
 ### Default path derivation
 
@@ -82,8 +84,6 @@ Sub-paths derived from `LibraryPaths` (not stored in config):
 | Purpose | Path |
 |---|---|
 | SQLite DB | `catalog_dir/musicum.db` |
-| Collections | `catalog_dir/collections/` |
-| Presets | `catalog_dir/presets/` |
 | Attachments | `catalog_dir/attachments/` |
 | Clip cache | `generated_dir/cache/` |
 | Waveforms | `generated_dir/waveforms/` |
@@ -135,16 +135,21 @@ Add `toml` crate to `musicum-core`. Remove `serde_json` settings usage from CLI.
 | `musicum-core/src/config.rs` | **new** — `AppSettings`, `LibraryPaths`, `load()`, `config_path()` |
 | `musicum-core/src/lib.rs` | expose `pub mod config` |
 | `musicum-core/src/db/mod.rs` | `connect()` takes `catalog_dir: &Path` instead of `library_dir: &str` |
-| `musicum-core/src/sidecar.rs` | collection/preset helpers take `catalog_dir: &Path`; paths change from `<library_dir>/.musicum/{collections,presets}/` to `<catalog_dir>/{collections,presets}/` |
-| `musicum-core/src/services/sync_service.rs` | `sync_library()` and `count_audio_files()` take `&LibraryPaths`; walk `files_dir`, read sidecars from `catalog_dir` |
+| `musicum-core/src/sidecar.rs` | remove `CollectionSidecar`, `PresetSidecar`, and all five collection/preset read-write helpers; keep file-sidecar helpers unchanged |
+| `musicum-core/src/services/sync_service.rs` | `sync_library()` takes `&LibraryPaths`; walks `files_dir`; `sync_collections` and `sync_presets` functions deleted; `SyncReport` drops `presets_added` / `presets_updated` fields |
+| `musicum-core/src/services/preset_service.rs` | fully DB-only: all functions drop `library_dir` / sidecar params; `create_preset` checks DB for duplicates; `delete_preset` only removes DB row; `set_processor_param` reads processors from DB; `update_preset_processors_full` delegates directly to `update_preset_processors` |
+| `musicum-core/src/services/clip_service.rs` | drop unused `_library_dir: &str` param from `update_clip_processors` |
 | `apps/cli/src/settings.rs` | **deleted** — replaced by `musicum_core::config` |
 | `apps/cli/src/main.rs` | call `musicum_core::config::load()`, apply `--library` override via `LibraryPaths::from_override()`, pass `&paths` everywhere |
-| `apps/cli/src/commands/sync.rs` | use `paths.files_dir` / `paths.catalog_dir` |
+| `apps/cli/src/commands/sync.rs` | use `paths.files_dir` / `paths.library_dir`; remove preset summary lines |
+| `apps/cli/src/commands/presets.rs` | take `catalog_dir: &Path`; `AddProcessor`/`RemoveProcessor` read/write processors through DB only; update empty-list message |
+| `apps/cli/src/commands/presets_editor.rs` | drop `library_dir: &str` param entirely — `update_preset_processors_full` no longer takes a dir argument |
+| `apps/cli/src/commands/clips.rs` | drop `library_dir` param; `update_clip_processors` calls lose the dir argument |
+| `apps/cli/src/commands/collections.rs` | update empty-list message (remove sidecar reference) |
 
 ### Sync service: directory skip logic
 
-The sync walker currently skips the `.musicum` hidden directory. With audio files
-isolated in `files/`, no skip is needed for the normal case. However, if a user
-overrides `files_dir` to point at `library_dir` directly (edge case), `catalog/`
-and `.generated/` could appear in the walk. The walker should skip any path whose
-component matches `catalog` or starts with `.` (dot-prefixed directories).
+The sync walker starts at `files_dir`, so `catalog/` and `.generated/` are
+not in the walk path by default. For robustness when a user overrides `files_dir`
+to point at `library_dir` directly, the walker skips any directory component
+that starts with `.` or is named `catalog`.

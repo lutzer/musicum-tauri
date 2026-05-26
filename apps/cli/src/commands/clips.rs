@@ -58,7 +58,7 @@ pub enum ClipsCommand {
     },
 }
 
-pub async fn run(db: &DatabaseConnection, library_dir: &str, args: ClipsArgs) -> Result<()> {
+pub async fn run(db: &DatabaseConnection, args: ClipsArgs) -> Result<()> {
     match args.command {
         ClipsCommand::List { file_slug, json } => {
             if let Some(slug) = file_slug {
@@ -187,7 +187,7 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: ClipsArgs) ->
                 })
                 .collect();
             let count = new_processors.len();
-            clip_service::update_clip_processors(db, library_dir, &clip_slug, new_processors).await?;
+            clip_service::update_clip_processors(db, &clip_slug, new_processors).await?;
             print_result("Applied preset", &[
                 Field("clip", clip_slug.clone()),
                 Field("preset", preset_slug.clone()),
@@ -196,7 +196,7 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: ClipsArgs) ->
         }
 
         ClipsCommand::ClearProcessors { clip_slug } => {
-            clip_service::update_clip_processors(db, library_dir, &clip_slug, vec![]).await?;
+            clip_service::update_clip_processors(db, &clip_slug, vec![]).await?;
             print_result("Cleared processors", &[
                 Field("clip", clip_slug.clone()),
             ]);
@@ -210,7 +210,7 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: ClipsArgs) ->
             let save: SaveFn<'_> = Box::new(|procs| {
                 let slug = slug.clone();
                 Box::pin(async move {
-                    clip_service::update_clip_processors(db, library_dir, &slug, procs)
+                    clip_service::update_clip_processors(db, &slug, procs)
                         .await
                         .map_err(anyhow::Error::from)
                 })

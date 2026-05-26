@@ -6,21 +6,23 @@ use slug::slugify;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
-use crate::db::entities::{clip, collection, collection_clip, file, file_attachment, file_metadata, preset};
+use crate::db::entities::{clip, collection_clip, file, file_attachment, file_metadata};
 use crate::sidecar::{self, ClipSidecar, FileSidecar};
 use crate::ServiceError;
 
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "ogg", "aiff", "aif"];
 
-pub fn count_audio_files(library_dir: &str) -> Result<usize, ServiceError> {
-    let lib_path = Path::new(library_dir);
-    let count = WalkDir::new(lib_path)
+pub fn count_audio_files(files_dir: &Path) -> Result<usize, ServiceError> {
+    let count = WalkDir::new(files_dir)
         .follow_links(false)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
             let p = e.path();
-            if p.components().any(|c| c.as_os_str() == ".musicum") { return false; }
+            if p.is_dir() {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name.starts_with('.') || name == "catalog" { return false; }
+            }
             if !p.is_file() { return false; }
             let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
             AUDIO_EXTENSIONS.contains(&ext.as_str())
@@ -35,16 +37,14 @@ pub struct SyncReport {
     pub files_updated:    Vec<String>,
     pub files_removed:    Vec<String>,
     pub sidecars_updated: Vec<String>,
-    pub presets_added:    Vec<String>,
-    pub presets_updated:  Vec<String>,
 }
 
 pub async fn sync_library(
     db: &DatabaseConnection,
-    library_dir: &str,
+    paths: &crate::config::LibraryPaths,
     on_progress: impl Fn(),
 ) -> Result<SyncReport, ServiceError> {
-    let lib_path = Path::new(library_dir);
+    let lib_path = &paths.files_dir;
     let mut report = SyncReport::default();
 
     // 1. Collect all current file paths in the DB for removal detection
@@ -60,9 +60,9 @@ pub async fn sync_library(
     {
         let path = entry.path();
 
-        // Skip .musicum hidden directory
-        if path.components().any(|c| c.as_os_str() == ".musicum") {
-            continue;
+        if path.is_dir() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with('.') || name == "catalog" { continue; }
         }
 
         if !path.is_file() {
@@ -105,10 +105,6 @@ pub async fn sync_library(
             report.files_removed.push(display);
         }
     }
-
-    // 4. Sync collections and presets from their sidecar directories
-    sync_collections(db, lib_path).await?;
-    sync_presets(db, lib_path, &mut report).await?;
 
     Ok(report)
 }
@@ -406,120 +402,5 @@ pub(crate) async fn delete_file_cascade(db: &DatabaseConnection, file_id: &str) 
     Ok(())
 }
 
-async fn sync_collections(
-    db: &DatabaseConnection,
-    library_dir: &Path,
-) -> Result<(), ServiceError> {
-    let sidecars = sidecar::read_collection_sidecars(library_dir)?;
-    for sc in sidecars {
-        let existing = collection::Entity::find()
-            .filter(collection::Column::Slug.eq(&sc.slug))
-            .one(db)
-            .await?;
-        let now = chrono::Utc::now().to_rfc3339();
 
-        let col_id = if let Some(ex) = existing {
-            collection::ActiveModel {
-                id: Set(ex.id.clone()),
-                slug: Set(sc.slug.clone()),
-                title: Set(sc.title.clone()),
-                description: Set(sc.description.clone()),
-                background_path: Set(None),
-                created_at: Set(ex.created_at.clone()),
-                updated_at: Set(now),
-            }
-            .update(db)
-            .await?;
-            ex.id
-        } else {
-            let id = Uuid::new_v4().to_string();
-            collection::ActiveModel {
-                id: Set(id.clone()),
-                slug: Set(sc.slug.clone()),
-                title: Set(sc.title.clone()),
-                description: Set(sc.description.clone()),
-                background_path: Set(None),
-                created_at: Set(now.clone()),
-                updated_at: Set(now),
-            }
-            .insert(db)
-            .await?;
-            id
-        };
-
-        // Re-sync clip membership (position = index in sidecar clips array)
-        collection_clip::Entity::delete_many()
-            .filter(collection_clip::Column::CollectionId.eq(&col_id))
-            .exec(db)
-            .await?;
-
-        for (pos, clip_slug) in sc.clips.iter().enumerate() {
-            if let Some(c) = clip::Entity::find()
-                .filter(clip::Column::Slug.eq(clip_slug.as_str()))
-                .one(db)
-                .await?
-            {
-                let _ = collection_clip::ActiveModel {
-                    id: Set(Uuid::new_v4().to_string()),
-                    collection_id: Set(col_id.clone()),
-                    clip_id: Set(c.id.clone()),
-                    position: Set(pos as i32),
-                }
-                .insert(db)
-                .await;
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn sync_presets(
-    db: &DatabaseConnection,
-    library_dir: &Path,
-    report: &mut SyncReport,
-) -> Result<(), ServiceError> {
-    let sidecars = sidecar::read_preset_sidecars(library_dir)?;
-    for sc in sidecars {
-        let processors_json = serde_json::to_string(&sc.processors)?;
-        let existing = preset::Entity::find()
-            .filter(preset::Column::Slug.eq(&sc.slug))
-            .one(db)
-            .await?;
-        let now = chrono::Utc::now().to_rfc3339();
-
-        if let Some(ex) = existing {
-            let differs = ex.title != sc.title
-                || ex.description != sc.description
-                || ex.processors != processors_json;
-            if differs {
-                preset::ActiveModel {
-                    id: Set(ex.id.clone()),
-                    slug: Set(sc.slug.clone()),
-                    title: Set(sc.title.clone()),
-                    description: Set(sc.description.clone()),
-                    processors: Set(processors_json),
-                    created_at: Set(ex.created_at.clone()),
-                    updated_at: Set(now),
-                }
-                .update(db)
-                .await?;
-                report.presets_updated.push(sc.title.clone());
-            }
-        } else {
-            preset::ActiveModel {
-                id: Set(Uuid::new_v4().to_string()),
-                slug: Set(sc.slug.clone()),
-                title: Set(sc.title.clone()),
-                description: Set(sc.description.clone()),
-                processors: Set(processors_json),
-                created_at: Set(now.clone()),
-                updated_at: Set(now),
-            }
-            .insert(db)
-            .await?;
-            report.presets_added.push(sc.title.clone());
-        }
-    }
-    Ok(())
-}
 
