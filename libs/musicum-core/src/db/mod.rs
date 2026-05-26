@@ -119,3 +119,10 @@ async fn create_all_tables(db: &DatabaseConnection) -> Result<(), DbErr> {
 
     Ok(())
 }
+
+#[cfg(test)]
+pub async fn test_db() -> DatabaseConnection {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    create_all_tables(&db).await.unwrap();
+    db
+}

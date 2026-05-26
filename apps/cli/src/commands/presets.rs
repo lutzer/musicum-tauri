@@ -33,7 +33,7 @@ pub enum PresetsCommand {
         #[arg(long, default_value = "")]
         description: String,
     },
-    Remove {
+    Delete {
         slug: String,
     },
     AddProcessor {
@@ -123,9 +123,9 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: PresetsArgs) 
             ]);
         }
 
-        PresetsCommand::Remove { slug } => {
+        PresetsCommand::Delete { slug } => {
             preset_service::delete_preset(db, library_dir, &slug).await?;
-            print_result(&format!("Removed preset '{slug}'"), &[]);
+            print_result(&format!("Deleted preset '{slug}'"), &[]);
         }
 
         PresetsCommand::AddProcessor { preset_slug, processor_type } => {

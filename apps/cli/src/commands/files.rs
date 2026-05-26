@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 use musicum_core::services::{clip_service, file_service};
 use sea_orm::DatabaseConnection;
 
-use crate::output::{DetailItem::{self, Field, Section}, print_detail, print_json, print_table};
+use crate::output::{DetailItem::{self, Field, Section}, print_detail, print_json, print_result, print_table};
 
 #[derive(Debug, Args)]
 pub struct FilesArgs {
@@ -23,6 +23,23 @@ pub enum FilesCommand {
         slug: String,
         #[arg(long)]
         json: bool,
+    },
+    /// Set notes for a file (full replace)
+    SetNotes {
+        slug: String,
+        notes: String,
+    },
+    /// Set tags for a file (full replace, comma-separated string)
+    SetTags {
+        slug: String,
+        tags: String,
+    },
+    /// Delete a file from DB and remove its sidecar
+    Delete {
+        slug: String,
+        /// Also delete the audio file from disk
+        #[arg(long)]
+        delete_audio: bool,
     },
 }
 
@@ -94,6 +111,22 @@ pub async fn run(db: &DatabaseConnection, args: FilesArgs) -> Result<()> {
                     );
                 }
             }
+        }
+        FilesCommand::SetNotes { slug, notes } => {
+            file_service::set_file_notes(db, &slug, &notes).await?;
+            print_result("Set notes", &[Field("file", slug.clone())]);
+        }
+        FilesCommand::SetTags { slug, tags } => {
+            file_service::set_file_tags(db, &slug, &tags).await?;
+            print_result("Set tags", &[Field("file", slug.clone())]);
+        }
+        FilesCommand::Delete { slug, delete_audio } => {
+            let clip_count = file_service::delete_file(db, &slug, delete_audio).await?;
+            print_result("Deleted file", &[
+                Field("slug", slug.clone()),
+                Field("clips", clip_count.to_string()),
+                Field("audio", if delete_audio { "deleted" } else { "kept" }.into()),
+            ]);
         }
     }
     Ok(())

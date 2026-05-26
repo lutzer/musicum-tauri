@@ -13,18 +13,21 @@ use crate::ServiceError;
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "ogg", "aiff", "aif"];
 
 #[derive(Debug, Default)]
-pub struct SyncStats {
-    pub added: u32,
-    pub updated: u32,
-    pub removed: u32,
+pub struct SyncReport {
+    pub files_added:      Vec<String>,
+    pub files_updated:    Vec<String>,
+    pub files_removed:    Vec<String>,
+    pub sidecars_updated: Vec<String>,
+    pub presets_added:    Vec<String>,
+    pub presets_updated:  Vec<String>,
 }
 
 pub async fn sync_library(
     db: &DatabaseConnection,
     library_dir: &str,
-) -> Result<SyncStats, ServiceError> {
+) -> Result<SyncReport, ServiceError> {
     let lib_path = Path::new(library_dir);
-    let mut stats = SyncStats::default();
+    let mut report = SyncReport::default();
 
     // 1. Collect all current file paths in the DB for removal detection
     let existing_files = file::Entity::find().all(db).await?;
@@ -64,7 +67,7 @@ pub async fn sync_library(
         let sc = sidecar::read_file_sidecar(path)?;
         let audio_info = probe_audio(path)?;
 
-        upsert_file(db, path, &path_str, &hash, &audio_info, &sc, &mut stats).await?;
+        upsert_file(db, path, &path_str, &hash, &audio_info, &sc, &mut report).await?;
     }
 
     // 3. Mark removed files (paths no longer on disk)
@@ -74,16 +77,21 @@ pub async fn sync_library(
             .one(db)
             .await?
         {
+            let display = Path::new(removed_path)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             delete_file_cascade(db, &f.id).await?;
-            stats.removed += 1;
+            report.files_removed.push(display);
         }
     }
 
     // 4. Sync collections and presets from their sidecar directories
     sync_collections(db, lib_path).await?;
-    sync_presets(db, lib_path).await?;
+    sync_presets(db, lib_path, &mut report).await?;
 
-    Ok(stats)
+    Ok(report)
 }
 
 // ── Audio probing ─────────────────────────────────────────────────────────
@@ -173,7 +181,7 @@ async fn upsert_file(
     hash: &str,
     audio: &AudioInfo,
     sc: &FileSidecar,
-    stats: &mut SyncStats,
+    report: &mut SyncReport,
 ) -> Result<(), ServiceError> {
     let name = path
         .file_stem()
@@ -191,15 +199,18 @@ async fn upsert_file(
 
     let file_id = if let Some(existing_model) = existing {
         if existing_model.hash == hash {
-            upsert_file_metadata(db, &existing_model.id, &sc.metadata).await?;
-            upsert_clips(db, &existing_model.id, &sc.clips).await?;
+            let meta_changed = upsert_file_metadata(db, &existing_model.id, &sc.metadata).await?;
+            let clips_changed = upsert_clips(db, &existing_model.id, &sc.clips).await?;
+            if meta_changed || clips_changed {
+                report.sidecars_updated.push(name);
+            }
             return Ok(());
         }
         // File changed (hash differs) — update
         file::ActiveModel {
             id: Set(existing_model.id.clone()),
             slug: Set(slug),
-            name: Set(name),
+            name: Set(name.clone()),
             path: Set(path_str.to_string()),
             duration: Set(audio.duration),
             sample_rate: Set(audio.sample_rate as i32),
@@ -213,7 +224,7 @@ async fn upsert_file(
         .await?;
 
         upsert_file_metadata(db, &existing_model.id, &sc.metadata).await?;
-        stats.updated += 1;
+        report.files_updated.push(name.clone());
         existing_model.id
     } else {
         // New file
@@ -222,7 +233,7 @@ async fn upsert_file(
         file::ActiveModel {
             id: Set(id.clone()),
             slug: Set(slug),
-            name: Set(name),
+            name: Set(name.clone()),
             path: Set(path_str.to_string()),
             duration: Set(audio.duration),
             sample_rate: Set(audio.sample_rate as i32),
@@ -236,7 +247,7 @@ async fn upsert_file(
         .await?;
 
         upsert_file_metadata(db, &id, &sc.metadata).await?;
-        stats.added += 1;
+        report.files_added.push(name.clone());
 
         // Write back default sidecar if it didn't exist
         let _ = sidecar::write_file_sidecar(path, sc);
@@ -252,7 +263,7 @@ async fn upsert_file_metadata(
     db: &DatabaseConnection,
     file_id: &str,
     meta: &crate::sidecar::FileMetadataSidecar,
-) -> Result<(), ServiceError> {
+) -> Result<bool, ServiceError> {
     let existing = file_metadata::Entity::find_by_id(file_id).one(db).await?;
     let model = file_metadata::ActiveModel {
         file_id: Set(file_id.to_string()),
@@ -263,19 +274,30 @@ async fn upsert_file_metadata(
         notes: Set(meta.notes.clone()),
         tags: Set(meta.tags.clone()),
     };
-    if existing.is_some() {
-        model.update(db).await?;
+    let changed = if let Some(ex) = existing {
+        let differs = ex.bpm != meta.bpm
+            || ex.key != meta.key
+            || ex.rating != meta.rating
+            || ex.color != meta.color
+            || ex.notes != meta.notes
+            || ex.tags != meta.tags;
+        if differs {
+            model.update(db).await?;
+        }
+        differs
     } else {
         model.insert(db).await?;
-    }
-    Ok(())
+        true
+    };
+    Ok(changed)
 }
 
 async fn upsert_clips(
     db: &DatabaseConnection,
     file_id: &str,
     clip_sidecars: &[ClipSidecar],
-) -> Result<(), ServiceError> {
+) -> Result<bool, ServiceError> {
+    let mut any_changed = false;
     for cs in clip_sidecars {
         let processors_json = serde_json::to_string(&cs.processors)?;
         let existing = clip::Entity::find()
@@ -285,21 +307,27 @@ async fn upsert_clips(
         let now = chrono::Utc::now().to_rfc3339();
 
         if let Some(ex) = existing {
-            clip::ActiveModel {
-                id: Set(ex.id.clone()),
-                slug: Set(cs.slug.clone()),
-                file_id: Set(file_id.to_string()),
-                title: Set(cs.title.clone()),
-                processors: Set(processors_json),
-                cached: Set(ex.cached.clone()),
-                cached_path: Set(ex.cached_path.clone()),
-                duration: Set(ex.duration),
-                notes: Set(cs.notes.clone()),
-                created_at: Set(ex.created_at.clone()),
-                updated_at: Set(now),
+            let differs = ex.title != cs.title
+                || ex.processors != processors_json
+                || ex.notes != cs.notes;
+            if differs {
+                clip::ActiveModel {
+                    id: Set(ex.id.clone()),
+                    slug: Set(cs.slug.clone()),
+                    file_id: Set(file_id.to_string()),
+                    title: Set(cs.title.clone()),
+                    processors: Set(processors_json),
+                    cached: Set(ex.cached.clone()),
+                    cached_path: Set(ex.cached_path.clone()),
+                    duration: Set(ex.duration),
+                    notes: Set(cs.notes.clone()),
+                    created_at: Set(ex.created_at.clone()),
+                    updated_at: Set(now),
+                }
+                .update(db)
+                .await?;
+                any_changed = true;
             }
-            .update(db)
-            .await?;
         } else {
             clip::ActiveModel {
                 id: Set(Uuid::new_v4().to_string()),
@@ -316,12 +344,13 @@ async fn upsert_clips(
             }
             .insert(db)
             .await?;
+            any_changed = true;
         }
     }
-    Ok(())
+    Ok(any_changed)
 }
 
-async fn delete_file_cascade(db: &DatabaseConnection, file_id: &str) -> Result<(), ServiceError> {
+pub(crate) async fn delete_file_cascade(db: &DatabaseConnection, file_id: &str) -> Result<(), ServiceError> {
     // Collect clip IDs first so we can remove collection_clip references
     let clips = clip::Entity::find()
         .filter(clip::Column::FileId.eq(file_id))
@@ -425,7 +454,11 @@ async fn sync_collections(
     Ok(())
 }
 
-async fn sync_presets(db: &DatabaseConnection, library_dir: &Path) -> Result<(), ServiceError> {
+async fn sync_presets(
+    db: &DatabaseConnection,
+    library_dir: &Path,
+    report: &mut SyncReport,
+) -> Result<(), ServiceError> {
     let sidecars = sidecar::read_preset_sidecars(library_dir)?;
     for sc in sidecars {
         let processors_json = serde_json::to_string(&sc.processors)?;
@@ -436,17 +469,23 @@ async fn sync_presets(db: &DatabaseConnection, library_dir: &Path) -> Result<(),
         let now = chrono::Utc::now().to_rfc3339();
 
         if let Some(ex) = existing {
-            preset::ActiveModel {
-                id: Set(ex.id.clone()),
-                slug: Set(sc.slug.clone()),
-                title: Set(sc.title.clone()),
-                description: Set(sc.description.clone()),
-                processors: Set(processors_json),
-                created_at: Set(ex.created_at.clone()),
-                updated_at: Set(now),
+            let differs = ex.title != sc.title
+                || ex.description != sc.description
+                || ex.processors != processors_json;
+            if differs {
+                preset::ActiveModel {
+                    id: Set(ex.id.clone()),
+                    slug: Set(sc.slug.clone()),
+                    title: Set(sc.title.clone()),
+                    description: Set(sc.description.clone()),
+                    processors: Set(processors_json),
+                    created_at: Set(ex.created_at.clone()),
+                    updated_at: Set(now),
+                }
+                .update(db)
+                .await?;
+                report.presets_updated.push(sc.title.clone());
             }
-            .update(db)
-            .await?;
         } else {
             preset::ActiveModel {
                 id: Set(Uuid::new_v4().to_string()),
@@ -459,6 +498,7 @@ async fn sync_presets(db: &DatabaseConnection, library_dir: &Path) -> Result<(),
             }
             .insert(db)
             .await?;
+            report.presets_added.push(sc.title.clone());
         }
     }
     Ok(())

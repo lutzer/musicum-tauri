@@ -47,6 +47,15 @@ pub enum ClipsCommand {
     Edit {
         slug: String,
     },
+    /// Set notes for a clip (full replace)
+    SetNotes {
+        slug: String,
+        notes: String,
+    },
+    /// Delete a clip from DB and remove it from its sidecar
+    Delete {
+        slug: String,
+    },
 }
 
 pub async fn run(db: &DatabaseConnection, library_dir: &str, args: ClipsArgs) -> Result<()> {
@@ -208,6 +217,14 @@ pub async fn run(db: &DatabaseConnection, library_dir: &str, args: ClipsArgs) ->
             });
 
             run_editor(&title, processors, save).await?;
+        }
+        ClipsCommand::SetNotes { slug, notes } => {
+            clip_service::set_clip_notes(db, &slug, &notes).await?;
+            print_result("Set notes", &[Field("clip", slug.clone())]);
+        }
+        ClipsCommand::Delete { slug } => {
+            clip_service::delete_clip(db, &slug).await?;
+            print_result("Deleted clip", &[Field("slug", slug.clone())]);
         }
     }
     Ok(())

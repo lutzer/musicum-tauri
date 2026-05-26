@@ -38,6 +38,7 @@ libs/structural-processors/
 - **ffmpeg is a system dependency.** Required only for clip caching (`cache_clip`).
 - **Audio plugin crates need dual crate-type.** Each plugin/processor `Cargo.toml` must
   have `crate-type = ["cdylib", "rlib"]` — `cdylib` for WASM, `rlib` for native linkage.
+- **Audio Engine applys processors and plugins** to the source audio files. the processors and plugins (Edits) are defined in the clips. Plugin parameters can be adjusted while the clip is playing, so make sure to design the audio engine taking this into account. A second audio pipeline is present for caching clips in a background operation.
 - **Logic goes in musicum-core.** CLI is display-only; all business logic lives in the core lib.
 - **CLI output style.** Reuse output functions so all commands share consistent formatting.
 

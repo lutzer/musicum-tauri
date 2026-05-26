@@ -20,8 +20,8 @@ async fn sync_discovers_wav_file() {
         .await
         .unwrap();
 
-    assert_eq!(stats.added, 1, "should have found one new file");
-    assert_eq!(stats.removed, 0);
+    assert_eq!(stats.files_added.len(), 1, "should have found one new file");
+    assert!(stats.files_removed.is_empty());
 
     let files = file::Entity::find().all(&db).await.unwrap();
     assert_eq!(files.len(), 1);
@@ -115,15 +115,15 @@ async fn sync_idempotent_on_unchanged_file() {
     let s1 = sync_service::sync_library(&db, dir.path().to_str().unwrap())
         .await
         .unwrap();
-    assert_eq!(s1.added, 1);
+    assert_eq!(s1.files_added.len(), 1);
 
     // Second sync — file unchanged
     let s2 = sync_service::sync_library(&db, dir.path().to_str().unwrap())
         .await
         .unwrap();
-    assert_eq!(s2.added, 0, "no new files on second sync");
-    assert_eq!(s2.updated, 0);
-    assert_eq!(s2.removed, 0);
+    assert!(s2.files_added.is_empty(), "no new files on second sync");
+    assert!(s2.files_updated.is_empty());
+    assert!(s2.files_removed.is_empty());
 
     // DB should still have exactly one file
     assert_eq!(file::Entity::find().count(&db).await.unwrap(), 1);
@@ -147,7 +147,7 @@ async fn sync_detects_removed_files() {
     let s2 = sync_service::sync_library(&db, dir.path().to_str().unwrap())
         .await
         .unwrap();
-    assert_eq!(s2.removed, 1);
+    assert_eq!(s2.files_removed.len(), 1);
     assert_eq!(file::Entity::find().count(&db).await.unwrap(), 0);
 }
 
@@ -164,7 +164,7 @@ async fn sync_walks_subdirectories() {
         .await
         .unwrap();
 
-    assert_eq!(stats.added, 3, "should find files in subdirectories too");
+    assert_eq!(stats.files_added.len(), 3, "should find files in subdirectories too");
 }
 
 #[tokio::test]
@@ -278,4 +278,88 @@ async fn sync_picks_up_sidecar_metadata_when_audio_unchanged() {
         .unwrap();
     assert_eq!(meta.bpm, Some(140.0), "BPM should be updated from sidecar even when audio is unchanged");
     assert_eq!(meta.key.as_deref(), Some("Am"));
+}
+
+#[tokio::test]
+async fn report_tracks_sidecar_metadata_update() {
+    let dir = tempdir().unwrap();
+    let wav = dir.path().join("bass.wav");
+    common::write_sine_wav(&wav, 1.0);
+
+    let db = setup(dir.path()).await;
+    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    // Modify sidecar metadata without touching the audio file
+    let mut sc = sidecar::read_file_sidecar(&wav).unwrap();
+    sc.metadata.bpm = Some(140.0);
+    let sidecar_path = sidecar::sidecar_path_for_audio(&wav);
+    std::fs::write(&sidecar_path, serde_json::to_string_pretty(&sc).unwrap()).unwrap();
+
+    let report = sync_service::sync_library(&db, dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(report.sidecars_updated, vec!["bass"], "sidecar change should be reported");
+    assert!(report.files_added.is_empty());
+    assert!(report.files_updated.is_empty());
+}
+
+#[tokio::test]
+async fn report_sidecar_unchanged_is_silent() {
+    let dir = tempdir().unwrap();
+    let wav = dir.path().join("pad.wav");
+    common::write_sine_wav(&wav, 1.0);
+
+    let db = setup(dir.path()).await;
+    sync_service::sync_library(&db, dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    // Second sync with no changes at all
+    let report = sync_service::sync_library(&db, dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    assert!(report.sidecars_updated.is_empty(), "unchanged sidecar should not appear in report");
+    assert!(report.files_added.is_empty());
+}
+
+#[tokio::test]
+async fn report_tracks_preset_added_and_updated() {
+    let dir = tempdir().unwrap();
+
+    let mut preset_sc = sidecar::PresetSidecar {
+        version: 1,
+        slug: "reverb-hall".into(),
+        title: "Hall Reverb".into(),
+        description: "".into(),
+        processors: vec![],
+    };
+    sidecar::write_preset_sidecar(dir.path(), &preset_sc).unwrap();
+
+    let db = setup(dir.path()).await;
+    let r1 = sync_service::sync_library(&db, dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(r1.presets_added, vec!["Hall Reverb"]);
+    assert!(r1.presets_updated.is_empty());
+
+    // Update the preset sidecar
+    preset_sc.description = "large hall".into();
+    sidecar::write_preset_sidecar(dir.path(), &preset_sc).unwrap();
+
+    let r2 = sync_service::sync_library(&db, dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+    assert!(r2.presets_added.is_empty());
+    assert_eq!(r2.presets_updated, vec!["Hall Reverb"]);
+
+    // Third sync — nothing changed
+    let r3 = sync_service::sync_library(&db, dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+    assert!(r3.presets_added.is_empty());
+    assert!(r3.presets_updated.is_empty());
 }
