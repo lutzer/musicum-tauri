@@ -3,21 +3,7 @@ use serde::Serialize;
 
 pub fn print_json<T: Serialize>(value: &T) {
     let json = serde_json::to_string_pretty(value).unwrap();
-    let term_w = terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
-    let inner_w = term_w.saturating_sub(4); // 2 for "│ " + 2 for " │"
-    let top = format!("┌{}┐", "─".repeat(term_w - 2));
-    let bot = format!("└{}┘", "─".repeat(term_w - 2));
-    println!("{top}");
-    for line in json.lines() {
-        let char_count = line.chars().count();
-        if char_count <= inner_w {
-            println!("│ {line:<inner_w$} │");
-        } else {
-            let truncated: String = line.chars().take(inner_w.saturating_sub(1)).collect();
-            println!("│ {truncated}… │");
-        }
-    }
-    println!("{bot}");
+    println!("{json}");
 }
 
 pub enum DetailItem<'a> {
