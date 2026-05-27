@@ -1,7 +1,10 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use musicum_core::services::{clip_service, file_service, preset_service};
-use musicum_core::sidecar;
+use musicum_core::{
+    deserialize_processor_edits,
+    edit::{EditKind, ProcessorEdit},
+    services::{clip_service, file_service, preset_service},
+};
 use sea_orm::DatabaseConnection;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -105,8 +108,7 @@ pub async fn run(db: &DatabaseConnection, args: ClipsArgs) -> Result<()> {
             if json {
                 print_json(&serde_json::json!({ "clip": clip, "file": file }));
             } else {
-                let processors: Vec<sidecar::ProcessorEntry> =
-                    serde_json::from_str(&clip.processors).unwrap_or_default();
+                let processors = deserialize_processor_edits(&clip.processors);
                 print_detail(&[
                     Section("clip"),
                     Field("slug", clip.slug.clone()),
@@ -129,25 +131,27 @@ pub async fn run(db: &DatabaseConnection, args: ClipsArgs) -> Result<()> {
                         "processors",
                         &["#", "TYPE", "PROCESSOR", "ENABLED", "PARAMS"],
                         processors.iter().enumerate().map(|(i, p)| {
-                            let (type_str, enabled, proc_id, params) = match p {
-                                sidecar::ProcessorEntry::Structural { enabled, processor, .. } =>
-                                    ("structural", *enabled, &processor.id, &processor.params),
-                                sidecar::ProcessorEntry::AudioPlugin { enabled, processor, .. } =>
-                                    ("audio-plugin", *enabled, &processor.id, &processor.params),
-                            };
-                            let params_str = if let Some(obj) = params.as_object() {
-                                obj.iter()
-                                    .map(|(k, v)| format!("{k}={}", v.to_string().trim_matches('"')))
-                                    .collect::<Vec<_>>()
-                                    .join(" ")
-                            } else {
-                                String::new()
+                            let (type_str, proc_id, params_str) = match &p.kind {
+                                EditKind::Structural { processor_id, params } => {
+                                    let ps = params.iter()
+                                        .map(|(k, v)| format!("{k}={v}"))
+                                        .collect::<Vec<_>>()
+                                        .join(" ");
+                                    ("structural", processor_id.as_str(), ps)
+                                }
+                                EditKind::Plugin { plugin_id, params } => {
+                                    let ps = params.iter()
+                                        .map(|(k, v)| format!("{k}={v}"))
+                                        .collect::<Vec<_>>()
+                                        .join(" ");
+                                    ("audio-plugin", plugin_id.as_str(), ps)
+                                }
                             };
                             vec![
                                 (i + 1).to_string(),
                                 type_str.to_string(),
-                                proc_id.clone(),
-                                enabled.to_string(),
+                                proc_id.to_string(),
+                                p.enabled.to_string(),
                                 params_str,
                             ]
                         }).collect(),
@@ -165,24 +169,11 @@ pub async fn run(db: &DatabaseConnection, args: ClipsArgs) -> Result<()> {
 
         ClipsCommand::ApplyPreset { clip_slug, preset_slug } => {
             let preset = preset_service::get_preset_by_slug(db, &preset_slug).await?;
-            let source_processors: Vec<sidecar::ProcessorEntry> =
-                serde_json::from_str(&preset.processors).unwrap_or_default();
-            let new_processors: Vec<sidecar::ProcessorEntry> = source_processors
+            let source_processors = deserialize_processor_edits(&preset.processors);
+            // Re-assign new UUIDs so each clip application is independent
+            let new_processors: Vec<ProcessorEdit> = source_processors
                 .into_iter()
-                .map(|e| match e {
-                    sidecar::ProcessorEntry::Structural { enabled, processor, .. } =>
-                        sidecar::ProcessorEntry::Structural {
-                            id: Uuid::new_v4().to_string(),
-                            enabled,
-                            processor,
-                        },
-                    sidecar::ProcessorEntry::AudioPlugin { enabled, processor, .. } =>
-                        sidecar::ProcessorEntry::AudioPlugin {
-                            id: Uuid::new_v4().to_string(),
-                            enabled,
-                            processor,
-                        },
-                })
+                .map(|e| ProcessorEdit { uuid: Uuid::new_v4(), ..e })
                 .collect();
             let count = new_processors.len();
             clip_service::update_clip_processors(db, &clip_slug, new_processors).await?;
@@ -202,7 +193,7 @@ pub async fn run(db: &DatabaseConnection, args: ClipsArgs) -> Result<()> {
 
         ClipsCommand::Edit { slug } => {
             let clip = clip_service::get_clip_by_slug(db, &slug).await?;
-            let processors = serde_json::from_str(&clip.processors).unwrap_or_default();
+            let processors = deserialize_processor_edits(&clip.processors);
             let title = format!("Clip: {slug}");
 
             let save: SaveFn<'_> = Box::new(|procs| {

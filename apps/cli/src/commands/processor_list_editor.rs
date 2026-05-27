@@ -6,7 +6,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use musicum_core::sidecar::{ProcessorEntry, ProcessorRef};
+use musicum_core::edit::{EditKind, ProcessorEdit};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -19,11 +19,11 @@ use structural_processor_sdk::processor::ParameterDescriptor;
 use uuid::Uuid;
 
 pub type SaveResult<'a> = Pin<Box<dyn Future<Output = Result<()>> + 'a>>;
-pub type SaveFn<'a> = Box<dyn Fn(Vec<ProcessorEntry>) -> SaveResult<'a> + 'a>;
+pub type SaveFn<'a> = Box<dyn Fn(Vec<ProcessorEdit>) -> SaveResult<'a> + 'a>;
 
 #[derive(Clone)]
 struct ParamRow {
-    key: String,
+    key:   String,
     value: serde_json::Value,
 }
 
@@ -41,20 +41,20 @@ enum Mode {
 }
 
 struct EditorState {
-    title: String,
-    processors: Vec<ProcessorEntry>,
+    title:           String,
+    processors:      Vec<ProcessorEdit>,
     available_types: Vec<(String, String)>,
-    proc_state: ListState,
-    param_state: ListState,
-    active_pane: Pane,
-    mode: Mode,
-    picker_idx: usize,
-    edit_buf: String,
-    status_msg: Option<String>,
+    proc_state:      ListState,
+    param_state:     ListState,
+    active_pane:     Pane,
+    mode:            Mode,
+    picker_idx:      usize,
+    edit_buf:        String,
+    status_msg:      Option<String>,
 }
 
 impl EditorState {
-    fn new(title: String, processors: Vec<ProcessorEntry>) -> Self {
+    fn new(title: String, processors: Vec<ProcessorEdit>) -> Self {
         let registry = structural_processors::registry();
         let mut available_types: Vec<(String, String)> = registry
             .values()
@@ -92,29 +92,32 @@ impl EditorState {
             Some(i) => i,
             None => return vec![],
         };
-        let params = match &self.processors[idx] {
-            ProcessorEntry::Structural { processor, .. } => &processor.params,
-            ProcessorEntry::AudioPlugin { processor, .. } => &processor.params,
-        };
-        match params.as_object() {
-            None => vec![],
-            Some(map) => map
+        match &self.processors[idx].kind {
+            EditKind::Structural { params, .. } => params
                 .iter()
-                .map(|(k, v)| ParamRow { key: k.clone(), value: v.clone() })
+                .map(|(k, v)| ParamRow {
+                    key:   k.clone(),
+                    value: serde_json::json!(v),
+                })
+                .collect(),
+            EditKind::Plugin { params, .. } => params
+                .iter()
+                .map(|(k, v)| ParamRow {
+                    key:   k.clone(),
+                    value: serde_json::json!(v),
+                })
                 .collect(),
         }
     }
 
-    fn proc_label(entry: &ProcessorEntry) -> String {
-        match entry {
-            ProcessorEntry::Structural { id, enabled, processor } => {
-                let flag = if *enabled { "" } else { " [off]" };
-                format!("[structural] {}{flag}  ({})", processor.id, &id[..8])
-            }
-            ProcessorEntry::AudioPlugin { id, enabled, processor } => {
-                let flag = if *enabled { "" } else { " [off]" };
-                format!("[audio-plugin] {}{flag}  ({})", processor.id, &id[..8])
-            }
+    fn proc_label(entry: &ProcessorEdit) -> String {
+        let flag = if entry.enabled { "" } else { " [off]" };
+        let short_uuid = &entry.uuid.to_string()[..8];
+        match &entry.kind {
+            EditKind::Structural { processor_id, .. } =>
+                format!("[structural] {processor_id}{flag}  ({short_uuid})"),
+            EditKind::Plugin { plugin_id, .. } =>
+                format!("[audio-plugin] {plugin_id}{flag}  ({short_uuid})"),
         }
     }
 
@@ -194,12 +197,14 @@ impl EditorState {
 
     fn apply_edit_to_processors(&mut self, key: &str, value: serde_json::Value) {
         if let Some(idx) = self.selected_proc_index() {
-            let params = match &mut self.processors[idx] {
-                ProcessorEntry::Structural { processor: ProcessorRef { params, .. }, .. } => params,
-                ProcessorEntry::AudioPlugin { processor: ProcessorRef { params, .. }, .. } => params,
-            };
-            if let Some(map) = params.as_object_mut() {
-                map.insert(key.to_string(), value);
+            let f = value.as_f64().unwrap_or(0.0);
+            match &mut self.processors[idx].kind {
+                EditKind::Structural { params, .. } => {
+                    params.insert(key.to_string(), f);
+                }
+                EditKind::Plugin { params, .. } => {
+                    params.insert(key.to_string(), f as f32);
+                }
             }
         }
     }
@@ -210,20 +215,20 @@ impl EditorState {
             return;
         };
         let descriptor = (entry.descriptor)();
-        let mut params = serde_json::Map::new();
+        let mut params = std::collections::HashMap::new();
         for p in descriptor.parameters {
             let (id, val) = match p {
-                ParameterDescriptor::Time { id, default, .. } => (id, serde_json::json!(default)),
-                ParameterDescriptor::Int { id, default, .. } => (id, serde_json::json!(default)),
+                ParameterDescriptor::Time { id, default, .. } => (id, *default),
+                ParameterDescriptor::Int { id, default, .. } => (id, *default as f64),
             };
             params.insert(id.to_string(), val);
         }
-        let new_entry = ProcessorEntry::Structural {
-            id: Uuid::new_v4().to_string(),
+        let new_entry = ProcessorEdit {
+            uuid:    Uuid::new_v4(),
             enabled: true,
-            processor: ProcessorRef {
-                id: type_id.to_string(),
-                params: serde_json::Value::Object(params),
+            kind:    EditKind::Structural {
+                processor_id: type_id.to_string(),
+                params,
             },
         };
         let insert_at = self.proc_state.selected().map(|i| i + 1).unwrap_or(0);
@@ -266,16 +271,13 @@ impl EditorState {
 
     fn toggle_selected(&mut self) {
         let Some(idx) = self.proc_state.selected() else { return };
-        match &mut self.processors[idx] {
-            ProcessorEntry::Structural { enabled, .. } => *enabled = !*enabled,
-            ProcessorEntry::AudioPlugin { enabled, .. } => *enabled = !*enabled,
-        }
+        self.processors[idx].enabled = !self.processors[idx].enabled;
     }
 }
 
 pub async fn run<'a>(
     title: &str,
-    initial_processors: Vec<ProcessorEntry>,
+    initial_processors: Vec<ProcessorEdit>,
     save: SaveFn<'a>,
 ) -> Result<()> {
     enable_raw_mode()?;

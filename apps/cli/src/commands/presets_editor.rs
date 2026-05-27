@@ -1,5 +1,5 @@
 use anyhow::Result;
-use musicum_core::services::preset_service;
+use musicum_core::{deserialize_processor_edits, services::preset_service};
 use sea_orm::DatabaseConnection;
 
 use super::processor_list_editor::{run, SaveFn};
@@ -9,7 +9,7 @@ pub async fn run_editor(
     preset_slug: &str,
 ) -> Result<()> {
     let preset = preset_service::get_preset_by_slug(db, preset_slug).await?;
-    let processors = serde_json::from_str(&preset.processors).unwrap_or_default();
+    let processors = deserialize_processor_edits(&preset.processors);
 
     let save: SaveFn<'_> = Box::new(|procs| {
         Box::pin(async move {

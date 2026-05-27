@@ -52,6 +52,51 @@ pub trait AudioPlugin: Sized {
     }
 }
 
+/// Object-safe, `Send`-able runtime interface for audio plugins.
+///
+/// Used by `PlaybackEngine` to process audio through a plugin chain at runtime.
+/// Every concrete type that implements `AudioPlugin + Send` automatically
+/// implements this trait via the blanket impl below.
+pub trait PluginProcessor: Send {
+    /// Process `samples` in-place (interleaved f32, `channels` channels, `sample_rate` Hz).
+    /// `timestamp_secs` is the track-relative position of the first sample.
+    fn process(
+        &mut self,
+        samples: &mut [f32],
+        channels: usize,
+        sample_rate: f32,
+        timestamp_secs: f64,
+    );
+
+    /// Set a parameter by string ID. Unknown IDs are silently ignored.
+    fn set_parameter(&mut self, id: &str, value: f32);
+
+    /// Get a parameter by string ID. Returns `0.0` for unknown IDs.
+    fn get_parameter(&self, id: &str) -> f32;
+
+    /// Return the current render snapshot as raw bytes.
+    fn render_snapshot(&self) -> &[u8];
+
+    /// Clear internal state (delay lines, reverb tails) on seek. Default: no-op.
+    fn reset(&mut self) {}
+}
+
+/// Every `T: AudioPlugin + Send` automatically implements `PluginProcessor`.
+impl<T: AudioPlugin + Send> PluginProcessor for T {
+    fn process(&mut self, samples: &mut [f32], channels: usize, sample_rate: f32, ts: f64) {
+        AudioPlugin::process(self, samples, channels, sample_rate, ts);
+    }
+    fn set_parameter(&mut self, id: &str, value: f32) {
+        AudioPlugin::set_parameter(self, id, value);
+    }
+    fn get_parameter(&self, id: &str) -> f32 {
+        AudioPlugin::get_parameter(self, id)
+    }
+    fn render_snapshot(&self) -> &[u8] {
+        AudioPlugin::render_snapshot(self)
+    }
+}
+
 /// Generate the full C ABI required by the Musicum plugin runtime for a type
 /// that implements [`AudioPlugin`].
 ///

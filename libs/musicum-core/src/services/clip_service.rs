@@ -4,7 +4,8 @@ use uuid::Uuid;
 use std::path::Path;
 
 use crate::db::entities::{clip, collection_clip};
-use crate::sidecar::{self, ClipSidecar, ProcessorEntry};
+use crate::edit::ProcessorEdit;
+use crate::sidecar::{self, ClipSidecar};
 use crate::services::file_service;
 use crate::ServiceError;
 
@@ -84,7 +85,7 @@ pub async fn create_clip(
 pub async fn update_clip_processors(
     db: &DatabaseConnection,
     clip_slug: &str,
-    processors: Vec<ProcessorEntry>,
+    processors: Vec<ProcessorEdit>,
 ) -> Result<(), ServiceError> {
     let clip = get_clip_by_slug(db, clip_slug).await?;
     let file = file_service::get_file_by_id(db, &clip.file_id).await?;
@@ -251,6 +252,34 @@ mod tests {
 
         let sc = sidecar::read_file_sidecar(&audio).unwrap();
         assert_eq!(sc.clips[0].notes, "great drop");
+    }
+
+    #[tokio::test]
+    async fn update_processors_stores_new_format() {
+        use crate::edit::{EditKind, ProcessorEdit};
+        use std::collections::HashMap;
+        use uuid::Uuid;
+
+        let db = test_db().await;
+        let dir = tempdir().unwrap();
+        let audio = dir.path().join("test.wav");
+        std::fs::write(&audio, b"").unwrap();
+        setup(&db, &audio).await;
+
+        let mut params = HashMap::new();
+        params.insert("gain".to_string(), 0.75_f32);
+        let edit = ProcessorEdit {
+            uuid: Uuid::new_v4(),
+            enabled: true,
+            kind: EditKind::Plugin { plugin_id: "gain".to_string(), params },
+        };
+
+        update_clip_processors(&db, "my-clip", vec![edit.clone()]).await.unwrap();
+
+        let clip = get_clip_by_slug(&db, "my-clip").await.unwrap();
+        let loaded: Vec<ProcessorEdit> = serde_json::from_str(&clip.processors).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].uuid, edit.uuid);
     }
 
     #[tokio::test]

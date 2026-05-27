@@ -5,7 +5,7 @@ use sea_orm::{
 use uuid::Uuid;
 
 use crate::db::entities::preset;
-use crate::sidecar;
+use crate::edit::{EditKind, ProcessorEdit};
 use crate::ServiceError;
 
 pub async fn list_presets(db: &DatabaseConnection) -> Result<Vec<preset::Model>, ServiceError> {
@@ -76,28 +76,29 @@ pub async fn set_processor_param(
     value: serde_json::Value,
 ) -> Result<(), ServiceError> {
     let model = get_preset_by_slug(db, preset_slug).await?;
-    let mut processors: Vec<sidecar::ProcessorEntry> =
-        serde_json::from_str(&model.processors)
-            .map_err(|e| ServiceError::InvalidInput(format!("invalid processors JSON: {e}")))?;
+    let mut processors: Vec<ProcessorEdit> =
+        crate::edit::deserialize_processor_edits(&model.processors);
 
     let found = processors.iter_mut().find(|e| {
-        let id = match e {
-            sidecar::ProcessorEntry::Structural { id, .. } => id.as_str(),
-            sidecar::ProcessorEntry::AudioPlugin { id, .. } => id.as_str(),
-        };
-        id == instance_uuid
+        e.uuid.to_string() == instance_uuid
     });
 
     let entry = found.ok_or_else(|| {
         ServiceError::NotFound(format!("processor '{instance_uuid}' in preset '{preset_slug}'"))
     })?;
 
-    let params = match entry {
-        sidecar::ProcessorEntry::Structural { processor, .. } => &mut processor.params,
-        sidecar::ProcessorEntry::AudioPlugin { processor, .. } => &mut processor.params,
-    };
-    if let Some(map) = params.as_object_mut() {
-        map.insert(key.to_string(), value);
+    // Update params based on kind
+    match &mut entry.kind {
+        EditKind::Structural { params, .. } => {
+            if let Some(v) = value.as_f64() {
+                params.insert(key.to_string(), v);
+            }
+        }
+        EditKind::Plugin { params, .. } => {
+            if let Some(v) = value.as_f64() {
+                params.insert(key.to_string(), v as f32);
+            }
+        }
     }
 
     update_preset_processors(db, preset_slug, processors).await
@@ -106,7 +107,7 @@ pub async fn set_processor_param(
 pub async fn update_preset_processors_full(
     db: &DatabaseConnection,
     slug: &str,
-    processors: Vec<sidecar::ProcessorEntry>,
+    processors: Vec<ProcessorEdit>,
 ) -> Result<(), ServiceError> {
     update_preset_processors(db, slug, processors).await
 }
@@ -114,7 +115,7 @@ pub async fn update_preset_processors_full(
 pub async fn update_preset_processors(
     db: &DatabaseConnection,
     slug: &str,
-    processors: Vec<sidecar::ProcessorEntry>,
+    processors: Vec<ProcessorEdit>,
 ) -> Result<(), ServiceError> {
     let model = get_preset_by_slug(db, slug).await?;
     let processors_json = serde_json::to_string(&processors)?;

@@ -1,32 +1,73 @@
 pub mod player;
+pub mod registry;
 pub mod source;
 
-use crate::sidecar::ProcessorEntry;
+use crate::edit::{EditKind, ProcessorEdit};
 use structural_processor_sdk::chain::StructuralEdit;
 
 pub use player::PlaybackEngine;
+pub use registry::EditRegistry;
 pub use source::FileAudioSource;
 
-/// Convert sidecar [`ProcessorEntry`] items into [`StructuralEdit`]s for the audio chain.
-/// `AudioPlugin` entries are filtered out — only `Structural` entries are used.
-pub fn sidecar_entries_to_edits(entries: &[ProcessorEntry]) -> Vec<StructuralEdit> {
-    entries
+/// Extract structural edits from a `ProcessorEdit` slice.
+/// Plugin edits are silently ignored. Used by `export_service`.
+pub fn structural_edits_from(edits: &[ProcessorEdit]) -> Vec<StructuralEdit> {
+    edits
         .iter()
         .filter_map(|e| {
-            if let ProcessorEntry::Structural { enabled, processor, .. } = e {
-                let params = processor
-                    .params
-                    .as_object()
-                    .map(|obj| {
-                        obj.iter()
-                            .filter_map(|(k, v)| v.as_f64().map(|f| (k.clone(), f)))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                Some(StructuralEdit { processor_id: processor.id.clone(), enabled: *enabled, params })
+            if let EditKind::Structural { processor_id, params } = &e.kind {
+                Some(StructuralEdit {
+                    processor_id: processor_id.clone(),
+                    enabled: e.enabled,
+                    params: params.clone(),
+                })
             } else {
                 None
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::edit::{EditKind, ProcessorEdit};
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    #[test]
+    fn structural_edits_from_filters_plugins() {
+        let edits = vec![
+            ProcessorEdit {
+                uuid: Uuid::new_v4(), enabled: true,
+                kind: EditKind::Structural {
+                    processor_id: "trim".to_string(),
+                    params: [("start".to_string(), 1.0)].into(),
+                },
+            },
+            ProcessorEdit {
+                uuid: Uuid::new_v4(), enabled: true,
+                kind: EditKind::Plugin {
+                    plugin_id: "gain".to_string(),
+                    params: HashMap::new(),
+                },
+            },
+        ];
+        let structural = structural_edits_from(&edits);
+        assert_eq!(structural.len(), 1);
+        assert_eq!(structural[0].processor_id, "trim");
+    }
+
+    #[test]
+    fn structural_edits_from_preserves_enabled_flag() {
+        let edit = ProcessorEdit {
+            uuid: Uuid::new_v4(), enabled: false,
+            kind: EditKind::Structural {
+                processor_id: "cut".to_string(),
+                params: HashMap::new(),
+            },
+        };
+        let structural = structural_edits_from(&[edit]);
+        assert_eq!(structural[0].enabled, false);
+    }
 }

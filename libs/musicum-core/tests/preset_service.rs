@@ -1,7 +1,9 @@
 mod common;
 
-use musicum_core::{db, sidecar::{ProcessorEntry, ProcessorRef}, services::preset_service};
+use musicum_core::{db, edit::{EditKind, ProcessorEdit}, services::preset_service};
+use std::collections::HashMap;
 use tempfile::tempdir;
+use uuid::Uuid;
 
 async fn setup() -> sea_orm::DatabaseConnection {
     let dir = tempdir().unwrap();
@@ -48,12 +50,15 @@ async fn update_preset_processors_persists_to_db() {
 
     preset_service::create_preset(&db, "p1", "P1", "").await.unwrap();
 
-    let processors = vec![ProcessorEntry::Structural {
-        id: "uuid-abc".into(),
+    let mut params = HashMap::new();
+    params.insert("start".to_string(), 0.0_f64);
+    params.insert("end".to_string(), 0.0_f64);
+    let processors = vec![ProcessorEdit {
+        uuid: Uuid::new_v4(),
         enabled: true,
-        processor: ProcessorRef {
-            id: "trim".into(),
-            params: serde_json::json!({ "start": 0.0, "end": 0.0 }),
+        kind: EditKind::Structural {
+            processor_id: "trim".to_string(),
+            params,
         },
     }];
 

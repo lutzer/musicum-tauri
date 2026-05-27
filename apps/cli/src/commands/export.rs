@@ -3,12 +3,12 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Result};
 use clap::Args;
 use musicum_core::{
-    audio::sidecar_entries_to_edits,
+    audio::structural_edits_from,
+    deserialize_processor_edits,
     services::{
         clip_service, file_service,
         export_service::{export_audio, ExportOptions},
     },
-    sidecar::ProcessorEntry,
 };
 use sea_orm::DatabaseConnection;
 use structural_processor_sdk::chain::StructuralEdit;
@@ -98,9 +98,8 @@ async fn resolve_target(
         let file = file_service::get_file_by_id(db, &clip.file_id)
             .await
             .map_err(|_| anyhow!("parent file for clip '{target}' not found"))?;
-        let entries: Vec<ProcessorEntry> = serde_json::from_str(&clip.processors)
-            .unwrap_or_default();
-        return Ok((PathBuf::from(file.path), sidecar_entries_to_edits(&entries)));
+        let edits = deserialize_processor_edits(&clip.processors);
+        return Ok((PathBuf::from(file.path), structural_edits_from(&edits)));
     }
 
     if let Ok(file) = file_service::get_file_by_slug(db, target).await {
@@ -108,9 +107,8 @@ async fn resolve_target(
     }
     if let Ok(clip) = clip_service::get_clip_by_slug(db, target).await {
         if let Ok(file) = file_service::get_file_by_id(db, &clip.file_id).await {
-            let entries: Vec<ProcessorEntry> = serde_json::from_str(&clip.processors)
-                .unwrap_or_default();
-            return Ok((PathBuf::from(file.path), sidecar_entries_to_edits(&entries)));
+            let edits = deserialize_processor_edits(&clip.processors);
+            return Ok((PathBuf::from(file.path), structural_edits_from(&edits)));
         }
     }
 

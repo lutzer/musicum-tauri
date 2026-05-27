@@ -1,4 +1,48 @@
 #[cfg(test)]
+mod plugin_processor_tests {
+    use crate::{AudioPlugin, plugin::PluginProcessor};
+
+    struct DummyPlugin { gain: f32 }
+    impl AudioPlugin for DummyPlugin {
+        fn descriptor() -> &'static crate::parameters::PluginDescriptor {
+            use crate::parameters::{PluginDescriptor, PluginMode};
+            static D: PluginDescriptor = PluginDescriptor {
+                id: "dummy", name: "Dummy", version: "0",
+                mode: PluginMode::Realtime, parameters: &[],
+            };
+            &D
+        }
+        fn new() -> Self { DummyPlugin { gain: 1.0 } }
+        fn set_parameter(&mut self, id: &str, v: f32) { if id == "gain" { self.gain = v; } }
+        fn get_parameter(&self, id: &str) -> f32 { if id == "gain" { self.gain } else { 0.0 } }
+    }
+
+    #[test]
+    fn blanket_impl_set_get() {
+        // DummyPlugin: AudioPlugin + Send → implements PluginProcessor via blanket
+        let mut p: Box<dyn PluginProcessor> = Box::new(DummyPlugin::new());
+        p.set_parameter("gain", 2.0);
+        assert_eq!(p.get_parameter("gain"), 2.0);
+    }
+
+    #[test]
+    fn blanket_impl_process_delegates() {
+        let mut p: Box<dyn PluginProcessor> = Box::new(DummyPlugin::new());
+        p.set_parameter("gain", 0.0);
+        let mut buf = vec![1.0_f32; 4];
+        // DummyPlugin.process is a no-op (default), so buf unchanged
+        p.process(&mut buf, 1, 44100.0, 0.0);
+        assert!(buf.iter().all(|&s| s == 1.0));
+    }
+
+    #[test]
+    fn reset_is_callable() {
+        let mut p: Box<dyn PluginProcessor> = Box::new(DummyPlugin::new());
+        p.reset(); // default no-op; must not panic
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use crate::{
         AudioAnalyzer, AudioPlugin, BoolParam, FloatParam,

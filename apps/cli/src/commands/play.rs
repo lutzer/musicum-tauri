@@ -6,9 +6,11 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use musicum_core::{
-    audio::{sidecar_entries_to_edits, PlaybackEngine},
+    audio::structural_edits_from,
+    deserialize_processor_edits,
+    edit::ProcessorEdit,
+    EditRegistry, PlaybackEngine,
     services::{clip_service, file_service},
-    sidecar::ProcessorEntry,
 };
 use ratatui::{
     backend::CrosstermBackend,
@@ -40,8 +42,11 @@ fn format_processor_display(edits: &[StructuralEdit]) -> String {
 
 pub async fn run(db: &DatabaseConnection, target: String, force_file: bool, force_clip: bool, loop_mode: bool) -> Result<()> {
     let (path, edits) = resolve_target(db, &target, force_file, force_clip).await?;
-    let processor_display = format_processor_display(&edits);
-    let engine = PlaybackEngine::new(&path, &edits)?;
+    // Show structural edits in the display (plugins are silent in the TUI for now)
+    let structural = structural_edits_from(&edits);
+    let processor_display = format_processor_display(&structural);
+    let registry = EditRegistry::default();
+    let engine = PlaybackEngine::new(&path, &edits, &registry)?;
     if loop_mode { engine.toggle_loop(); }
     engine.play();
     run_player(engine, processor_display)
@@ -52,7 +57,7 @@ async fn resolve_target(
     target: &str,
     force_file: bool,
     force_clip: bool,
-) -> Result<(PathBuf, Vec<StructuralEdit>)> {
+) -> Result<(PathBuf, Vec<ProcessorEdit>)> {
     if force_file {
         let file = file_service::get_file_by_slug(db, target)
             .await
@@ -67,9 +72,7 @@ async fn resolve_target(
         let file = file_service::get_file_by_id(db, &clip.file_id)
             .await
             .map_err(|_| anyhow!("parent file for clip '{target}' not found"))?;
-        let entries: Vec<ProcessorEntry> = serde_json::from_str(&clip.processors)
-            .unwrap_or_default();
-        let edits = sidecar_entries_to_edits(&entries);
+        let edits = deserialize_processor_edits(&clip.processors);
         return Ok((PathBuf::from(file.path), edits));
     }
 
@@ -78,9 +81,7 @@ async fn resolve_target(
     }
     if let Ok(clip) = clip_service::get_clip_by_slug(db, target).await {
         if let Ok(file) = file_service::get_file_by_id(db, &clip.file_id).await {
-            let entries: Vec<ProcessorEntry> = serde_json::from_str(&clip.processors)
-                .unwrap_or_default();
-            let edits = sidecar_entries_to_edits(&entries);
+            let edits = deserialize_processor_edits(&clip.processors);
             return Ok((PathBuf::from(file.path), edits));
         }
     }

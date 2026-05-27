@@ -1,7 +1,10 @@
 use anyhow::{bail, Result};
 use clap::{Args, Subcommand};
-use musicum_core::services::preset_service;
-use musicum_core::sidecar::{ProcessorEntry, ProcessorRef};
+use musicum_core::{
+    deserialize_processor_edits,
+    edit::{EditKind, ProcessorEdit},
+    services::preset_service,
+};
 use sea_orm::DatabaseConnection;
 use slug::slugify;
 use structural_processor_sdk::processor::ParameterDescriptor;
@@ -78,8 +81,7 @@ pub async fn run(db: &DatabaseConnection, _catalog_dir: &std::path::Path, args: 
             if json {
                 print_json(&preset);
             } else {
-                let processors: Vec<ProcessorEntry> =
-                    serde_json::from_str(&preset.processors).unwrap_or_else(|_| vec![]);
+                let processors = deserialize_processor_edits(&preset.processors);
                 print_detail(&[
                     Field("slug", preset.slug.clone()),
                     Field("title", preset.title.clone()),
@@ -93,18 +95,25 @@ pub async fn run(db: &DatabaseConnection, _catalog_dir: &std::path::Path, args: 
                         "processors",
                         &["UUID", "KIND", "PROC", "ENABLED", "PARAMS"],
                         processors.iter().map(|entry| {
-                            let (id, kind, proc_id, enabled, params) = match entry {
-                                ProcessorEntry::Structural { id, enabled, processor } => (
-                                    id.as_str(), "structural", processor.id.as_str(), *enabled,
-                                    format_params(&processor.params),
-                                ),
-                                ProcessorEntry::AudioPlugin { id, enabled, processor } => (
-                                    id.as_str(), "audio-plugin", processor.id.as_str(), *enabled,
-                                    format_params(&processor.params),
-                                ),
+                            let (kind, proc_id, params_str) = match &entry.kind {
+                                EditKind::Structural { processor_id, params } => {
+                                    let ps = params.iter()
+                                        .map(|(k, v)| format!("{k}={v}"))
+                                        .collect::<Vec<_>>()
+                                        .join(", ");
+                                    ("structural", processor_id.as_str(), ps)
+                                }
+                                EditKind::Plugin { plugin_id, params } => {
+                                    let ps = params.iter()
+                                        .map(|(k, v)| format!("{k}={v}"))
+                                        .collect::<Vec<_>>()
+                                        .join(", ");
+                                    ("audio-plugin", plugin_id.as_str(), ps)
+                                }
                             };
-                            vec![id.to_string(), kind.to_string(), proc_id.to_string(),
-                                 enabled.to_string(), params]
+                            let short_uuid = &entry.uuid.to_string()[..8];
+                            vec![short_uuid.to_string(), kind.to_string(), proc_id.to_string(),
+                                 entry.enabled.to_string(), params_str]
                         }).collect(),
                     );
                 }
@@ -143,37 +152,32 @@ pub async fn run(db: &DatabaseConnection, _catalog_dir: &std::path::Path, args: 
                 })?;
 
             let descriptor = (entry.descriptor)();
-            let mut default_params = serde_json::Map::new();
+            let mut default_params = std::collections::HashMap::new();
             for p in descriptor.parameters {
                 let (param_id, val) = match p {
-                    ParameterDescriptor::Time { id, default, .. } => {
-                        (id, serde_json::json!(default))
-                    }
-                    ParameterDescriptor::Int { id, default, .. } => {
-                        (id, serde_json::json!(default))
-                    }
+                    ParameterDescriptor::Time { id, default, .. } => (id, *default),
+                    ParameterDescriptor::Int { id, default, .. } => (id, *default as f64),
                 };
                 default_params.insert(param_id.to_string(), val);
             }
 
-            let instance_id = Uuid::new_v4().to_string();
-            let new_entry = ProcessorEntry::Structural {
-                id: instance_id.clone(),
+            let instance_uuid = Uuid::new_v4();
+            let new_entry = ProcessorEdit {
+                uuid:    instance_uuid,
                 enabled: true,
-                processor: ProcessorRef {
-                    id: processor_type.clone(),
-                    params: serde_json::Value::Object(default_params),
+                kind:    EditKind::Structural {
+                    processor_id: processor_type.clone(),
+                    params:       default_params,
                 },
             };
 
             let preset = preset_service::get_preset_by_slug(db, &preset_slug).await?;
-            let mut processors: Vec<ProcessorEntry> =
-                serde_json::from_str(&preset.processors).unwrap_or_default();
+            let mut processors = deserialize_processor_edits(&preset.processors);
             processors.push(new_entry);
             preset_service::update_preset_processors(db, &preset_slug, processors).await?;
 
             print_result("Added processor", &[
-                Field("id", instance_id.clone()),
+                Field("id", instance_uuid.to_string()),
                 Field("preset", preset_slug.clone()),
                 Field("type", processor_type.clone()),
             ]);
@@ -196,16 +200,9 @@ pub async fn run(db: &DatabaseConnection, _catalog_dir: &std::path::Path, args: 
 
         PresetsCommand::RemoveProcessor { preset_slug, instance_uuid } => {
             let preset = preset_service::get_preset_by_slug(db, &preset_slug).await?;
-            let mut processors: Vec<ProcessorEntry> =
-                serde_json::from_str(&preset.processors).unwrap_or_default();
+            let mut processors = deserialize_processor_edits(&preset.processors);
             let original_len = processors.len();
-            processors.retain(|e| {
-                let id = match e {
-                    ProcessorEntry::Structural { id, .. } => id.as_str(),
-                    ProcessorEntry::AudioPlugin { id, .. } => id.as_str(),
-                };
-                id != instance_uuid
-            });
+            processors.retain(|e| e.uuid.to_string() != instance_uuid);
             if processors.len() == original_len {
                 bail!("processor '{instance_uuid}' not found in preset '{preset_slug}'");
             }
@@ -228,15 +225,4 @@ fn parse_param_value(s: &str) -> serde_json::Value {
         }
     }
     serde_json::Value::String(s.to_string())
-}
-
-fn format_params(params: &serde_json::Value) -> String {
-    match params.as_object() {
-        None => "{}".to_string(),
-        Some(map) => map
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join(", "),
-    }
 }
