@@ -77,7 +77,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Sync              => commands::sync::run(&db, &paths).await?,
-        Commands::Files(args)       => commands::files::run(&db, args).await?,
+        Commands::Files(args)       => commands::files::run(&db, &paths.files_dir, args).await?,
         Commands::Clips(args)       => commands::clips::run(&db, args).await?,
         Commands::Collections(args) => commands::collections::run(&db, args).await?,
         Commands::Presets(args)     => commands::presets::run(&db, &paths.catalog_dir, args).await?,

@@ -1,9 +1,25 @@
+use std::path::Path;
+
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use musicum_core::services::{clip_service, file_service};
 use sea_orm::DatabaseConnection;
 
 use crate::output::{DetailItem::{self, Field, Section}, print_detail, print_json, print_result, print_table};
+
+/// Returns the subfolder of `file_path` relative to `files_dir`, or "-" if at root.
+fn subfolder_of(file_path: &str, files_dir: &Path) -> String {
+    let path = Path::new(file_path);
+    if let Some(parent) = path.parent() {
+        if let Ok(rel) = parent.strip_prefix(files_dir) {
+            let s = rel.to_string_lossy();
+            if !s.is_empty() && s != "." {
+                return s.to_string();
+            }
+        }
+    }
+    "-".to_string()
+}
 
 #[derive(Debug, Args)]
 pub struct FilesArgs {
@@ -43,7 +59,7 @@ pub enum FilesCommand {
     },
 }
 
-pub async fn run(db: &DatabaseConnection, args: FilesArgs) -> Result<()> {
+pub async fn run(db: &DatabaseConnection, files_dir: &Path, args: FilesArgs) -> Result<()> {
     match args.command {
         FilesCommand::List { json } => {
             let files = file_service::list_files(db).await?;
@@ -54,12 +70,14 @@ pub async fn run(db: &DatabaseConnection, args: FilesArgs) -> Result<()> {
             } else {
                 print_table(
                     "files",
-                    &["SLUG", "NAME  [DURATION  RATE  CH]"],
+                    &["SLUG", "FOLDER", "NAME", "[DURATION  RATE  CH]"],
                     files
                         .iter()
                         .map(|f| vec![
                             f.slug.clone(),
-                            format!("{}  [{:.1}s  {}Hz  {}ch]", f.name, f.duration, f.sample_rate, f.channels),
+                            subfolder_of(&f.path, files_dir),
+                            f.name.clone(),
+                            format!("[{:.1}s  {}Hz  {}ch]", f.duration, f.sample_rate, f.channels),
                         ])
                         .collect(),
                 );

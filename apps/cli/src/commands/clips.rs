@@ -89,10 +89,10 @@ pub async fn run(db: &DatabaseConnection, args: ClipsArgs) -> Result<()> {
                         files.into_iter().map(|f| (f.id, f.slug)).collect();
                     print_table(
                         "clips",
-                        &["SLUG", "FILE  TITLE"],
+                        &["SLUG", "TITLE", "FILE"],
                         clips.iter().map(|c| {
                             let file_slug = file_slugs.get(&c.file_id).map(|s| s.as_str()).unwrap_or("?");
-                            vec![c.slug.clone(), format!("{}  {}", file_slug, c.title)]
+                            vec![c.slug.clone(), c.title.clone(), file_slug.to_string()]
                         }).collect(),
                     );
                 }
