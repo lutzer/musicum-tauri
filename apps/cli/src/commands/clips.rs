@@ -72,8 +72,8 @@ pub async fn run(db: &DatabaseConnection, args: ClipsArgs) -> Result<()> {
                 } else {
                     print_table(
                         "clips",
-                        &["SLUG", "TITLE  [CACHED]"],
-                        clips.iter().map(|c| vec![c.slug.clone(), format!("{}  [{}]", c.title, c.cached)]).collect(),
+                        &["SLUG", "TITLE"],
+                        clips.iter().map(|c| vec![c.slug.clone(), c.title.clone()]).collect(),
                     );
                 }
             } else {
@@ -89,10 +89,10 @@ pub async fn run(db: &DatabaseConnection, args: ClipsArgs) -> Result<()> {
                         files.into_iter().map(|f| (f.id, f.slug)).collect();
                     print_table(
                         "clips",
-                        &["SLUG", "FILE  TITLE  [CACHED]"],
+                        &["SLUG", "FILE  TITLE"],
                         clips.iter().map(|c| {
                             let file_slug = file_slugs.get(&c.file_id).map(|s| s.as_str()).unwrap_or("?");
-                            vec![c.slug.clone(), format!("{}  {}  [{}]", file_slug, c.title, c.cached)]
+                            vec![c.slug.clone(), format!("{}  {}", file_slug, c.title)]
                         }).collect(),
                     );
                 }
@@ -111,8 +111,6 @@ pub async fn run(db: &DatabaseConnection, args: ClipsArgs) -> Result<()> {
                     Section("clip"),
                     Field("slug", clip.slug.clone()),
                     Field("title", clip.title.clone()),
-                    Field("cached", clip.cached.clone()),
-                    Field("cached_path", clip.cached_path.clone().unwrap_or_else(|| "-".into())),
                     Field("duration", clip.duration.map_or("-".into(), |d| format!("{d:.3}s"))),
                     Field("notes", if clip.notes.is_empty() { "-".into() } else { clip.notes.clone() }),
                     Section("file"),

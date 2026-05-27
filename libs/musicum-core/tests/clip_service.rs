@@ -25,7 +25,6 @@ async fn create_clip_adds_to_db_and_sidecar() {
 
     assert_eq!(clip.slug, "my-clip");
     assert_eq!(clip.title, "My Clip");
-    assert_eq!(clip.cached, "no_cache");
 
     // Clip is in DB
     let all = clip::Entity::find().all(&db).await.unwrap();

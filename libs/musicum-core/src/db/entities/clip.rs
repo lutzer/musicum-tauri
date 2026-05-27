@@ -11,8 +11,6 @@ pub struct Model {
     pub file_id: String,
     pub title: String,
     pub processors: String,
-    pub cached: String,
-    pub cached_path: Option<String>,
     pub duration: Option<f64>,
     pub notes: String,
     pub created_at: String,

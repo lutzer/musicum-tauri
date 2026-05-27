@@ -8,7 +8,7 @@
 * [ ] add collection feature
 * [ ] display folder name and tags in list
 * [ ] export/import function for collections and presets
-* [ ] export audio files in a certain format
+* [x] export audio files in a certain format
 * [ ] create workflow to export slices, add bool to slice tool, to export all slices
 * [ ] add zero crossing cuts to edits
 * [ ] add audio plugin pipeline

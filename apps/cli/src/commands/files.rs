@@ -103,10 +103,10 @@ pub async fn run(db: &DatabaseConnection, args: FilesArgs) -> Result<()> {
                 if !clips.is_empty() {
                     print_table(
                         "clips",
-                        &["SLUG", "TITLE  [CACHED]"],
+                        &["SLUG", "TITLE"],
                         clips
                             .iter()
-                            .map(|c| vec![c.slug.clone(), format!("{}  [{}]", c.title, c.cached)])
+                            .map(|c| vec![c.slug.clone(), c.title.clone()])
                             .collect(),
                     );
                 }

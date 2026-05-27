@@ -1,5 +1,5 @@
 use std::path::Path;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder};
 
 use crate::db::entities::{clip, file, file_metadata};
 use crate::services::sync_service;
@@ -112,19 +112,10 @@ pub async fn delete_file(
     let file = get_file_by_slug(db, file_slug).await?;
     let audio_path = Path::new(&file.path);
 
-    // Collect clip cached paths before cascade deletes them
-    let clips = clip::Entity::find()
+    let clip_count = clip::Entity::find()
         .filter(clip::Column::FileId.eq(&file.id))
-        .all(db)
-        .await?;
-    let clip_count = clips.len();
-
-    // Delete cached clip audio files from disk
-    for c in &clips {
-        if let Some(ref cp) = c.cached_path {
-            let _ = std::fs::remove_file(cp); // best-effort
-        }
-    }
+        .count(db)
+        .await? as usize;
 
     // Delete sidecar
     let sidecar_path = sidecar::sidecar_path_for_audio(audio_path);

@@ -70,8 +70,6 @@ pub async fn create_clip(
         file_id: Set(file.id),
         title: Set(title.to_string()),
         processors: Set("[]".to_string()),
-        cached: Set("no_cache".to_string()),
-        cached_path: Set(None),
         duration: Set(None),
         notes: Set(String::new()),
         created_at: Set(now.clone()),
@@ -108,13 +106,11 @@ pub async fn update_clip_processors(
         slug:        Set(clip.slug),
         file_id:     Set(clip.file_id),
         title:       Set(clip.title),
-        processors:  Set(processors_json),
-        cached:      Set(clip.cached),
-        cached_path: Set(clip.cached_path),
-        duration:    Set(clip.duration),
-        notes:       Set(clip.notes),
-        created_at:  Set(clip.created_at),
-        updated_at:  Set(now),
+        processors: Set(processors_json),
+        duration:   Set(clip.duration),
+        notes:      Set(clip.notes),
+        created_at: Set(clip.created_at),
+        updated_at: Set(now),
     }
     .update(db)
     .await?;
@@ -146,13 +142,11 @@ pub async fn set_clip_notes(
         slug:        Set(clip.slug),
         file_id:     Set(clip.file_id),
         title:       Set(clip.title),
-        processors:  Set(clip.processors),
-        cached:      Set(clip.cached),
-        cached_path: Set(clip.cached_path),
-        duration:    Set(clip.duration),
-        notes:       Set(notes.to_string()),
-        created_at:  Set(clip.created_at),
-        updated_at:  Set(now),
+        processors: Set(clip.processors),
+        duration:   Set(clip.duration),
+        notes:      Set(notes.to_string()),
+        created_at: Set(clip.created_at),
+        updated_at: Set(now),
     }
     .update(db)
     .await?;
@@ -167,11 +161,6 @@ pub async fn delete_clip(
     let clip = get_clip_by_slug(db, clip_slug).await?;
     let file = file_service::get_file_by_id(db, &clip.file_id).await?;
     let audio_path = Path::new(&file.path);
-
-    // Delete cached audio file if present
-    if let Some(ref cp) = clip.cached_path {
-        let _ = std::fs::remove_file(cp); // best-effort
-    }
 
     // Remove clip entry from sidecar
     let mut sc = sidecar::read_file_sidecar(audio_path)?;
@@ -232,17 +221,15 @@ mod tests {
         sidecar::write_file_sidecar(audio_path, &sc).unwrap();
 
         clip::ActiveModel {
-            id:          Set(uuid::Uuid::new_v4().to_string()),
-            slug:        Set("my-clip".to_string()),
-            file_id:     Set(file_id),
-            title:       Set("My Clip".to_string()),
-            processors:  Set("[]".to_string()),
-            cached:      Set("no_cache".to_string()),
-            cached_path: Set(None),
-            duration:    Set(None),
-            notes:       Set(String::new()),
-            created_at:  Set(now.clone()),
-            updated_at:  Set(now),
+            id:         Set(uuid::Uuid::new_v4().to_string()),
+            slug:       Set("my-clip".to_string()),
+            file_id:    Set(file_id),
+            title:      Set("My Clip".to_string()),
+            processors: Set("[]".to_string()),
+            duration:   Set(None),
+            notes:      Set(String::new()),
+            created_at: Set(now.clone()),
+            updated_at: Set(now),
         }
         .insert(db)
         .await

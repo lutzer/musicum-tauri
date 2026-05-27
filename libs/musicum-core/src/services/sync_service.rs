@@ -327,15 +327,13 @@ async fn upsert_clips(
                 || ex.notes != cs.notes;
             if differs {
                 clip::ActiveModel {
-                    id: Set(ex.id.clone()),
-                    slug: Set(cs.slug.clone()),
-                    file_id: Set(file_id.to_string()),
-                    title: Set(cs.title.clone()),
+                    id:         Set(ex.id.clone()),
+                    slug:       Set(cs.slug.clone()),
+                    file_id:    Set(file_id.to_string()),
+                    title:      Set(cs.title.clone()),
                     processors: Set(processors_json),
-                    cached: Set(ex.cached.clone()),
-                    cached_path: Set(ex.cached_path.clone()),
-                    duration: Set(ex.duration),
-                    notes: Set(cs.notes.clone()),
+                    duration:   Set(ex.duration),
+                    notes:      Set(cs.notes.clone()),
                     created_at: Set(ex.created_at.clone()),
                     updated_at: Set(now),
                 }
@@ -345,15 +343,13 @@ async fn upsert_clips(
             }
         } else {
             clip::ActiveModel {
-                id: Set(Uuid::new_v4().to_string()),
-                slug: Set(cs.slug.clone()),
-                file_id: Set(file_id.to_string()),
-                title: Set(cs.title.clone()),
+                id:         Set(Uuid::new_v4().to_string()),
+                slug:       Set(cs.slug.clone()),
+                file_id:    Set(file_id.to_string()),
+                title:      Set(cs.title.clone()),
                 processors: Set(processors_json),
-                cached: Set("no_cache".into()),
-                cached_path: Set(None),
-                duration: Set(None),
-                notes: Set(cs.notes.clone()),
+                duration:   Set(None),
+                notes:      Set(cs.notes.clone()),
                 created_at: Set(now.clone()),
                 updated_at: Set(now),
             }
