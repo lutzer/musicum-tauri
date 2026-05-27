@@ -19,9 +19,9 @@ use ratatui::{
     Frame, Terminal, TerminalOptions, Viewport,
 };
 use sea_orm::DatabaseConnection;
-use structural_processor_sdk::chain::Edit;
+use structural_processor_sdk::chain::StructuralEdit;
 
-fn format_processor_display(edits: &[Edit]) -> String {
+fn format_processor_display(edits: &[StructuralEdit]) -> String {
     edits
         .iter()
         .filter(|e| e.enabled)
@@ -52,7 +52,7 @@ async fn resolve_target(
     target: &str,
     force_file: bool,
     force_clip: bool,
-) -> Result<(PathBuf, Vec<Edit>)> {
+) -> Result<(PathBuf, Vec<StructuralEdit>)> {
     if force_file {
         let file = file_service::get_file_by_slug(db, target)
             .await

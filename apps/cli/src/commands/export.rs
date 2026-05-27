@@ -11,7 +11,7 @@ use musicum_core::{
     sidecar::ProcessorEntry,
 };
 use sea_orm::DatabaseConnection;
-use structural_processor_sdk::chain::Edit;
+use structural_processor_sdk::chain::StructuralEdit;
 
 use crate::output::{DetailItem, print_result};
 
@@ -83,7 +83,7 @@ async fn resolve_target(
     target: &str,
     force_file: bool,
     force_clip: bool,
-) -> Result<(PathBuf, Vec<Edit>)> {
+) -> Result<(PathBuf, Vec<StructuralEdit>)> {
     if force_file {
         let file = file_service::get_file_by_slug(db, target)
             .await

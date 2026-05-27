@@ -2,7 +2,7 @@ pub mod chain;
 pub mod processor;
 pub mod source;
 
-pub use chain::{Edit, build_chain, chain_output_duration,
+pub use chain::{StructuralEdit, build_chain, chain_output_duration,
                 map_time_forward, map_time_back, descriptors_json, validate_edit};
 pub use processor::{
     ParameterDescriptor, Params, ProcessorDescriptor,

@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use structural_processor_sdk::chain::{build_chain, Edit};
+use structural_processor_sdk::chain::{build_chain, StructuralEdit};
 use uuid::Uuid;
 
 use crate::audio::FileAudioSource;
@@ -113,7 +113,7 @@ fn invoke_ffmpeg(
 
 pub async fn export_audio(
     file_path: &Path,
-    edits: &[Edit],
+    edits: &[StructuralEdit],
     output_path: &Path,
     options: ExportOptions,
 ) -> Result<ExportResult> {

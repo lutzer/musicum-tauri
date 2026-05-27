@@ -2,14 +2,14 @@ pub mod player;
 pub mod source;
 
 use crate::sidecar::ProcessorEntry;
-use structural_processor_sdk::chain::Edit;
+use structural_processor_sdk::chain::StructuralEdit;
 
 pub use player::PlaybackEngine;
 pub use source::FileAudioSource;
 
-/// Convert sidecar [`ProcessorEntry`] items into [`Edit`]s for the audio chain.
+/// Convert sidecar [`ProcessorEntry`] items into [`StructuralEdit`]s for the audio chain.
 /// `AudioPlugin` entries are filtered out — only `Structural` entries are used.
-pub fn sidecar_entries_to_edits(entries: &[ProcessorEntry]) -> Vec<Edit> {
+pub fn sidecar_entries_to_edits(entries: &[ProcessorEntry]) -> Vec<StructuralEdit> {
     entries
         .iter()
         .filter_map(|e| {
@@ -23,7 +23,7 @@ pub fn sidecar_entries_to_edits(entries: &[ProcessorEntry]) -> Vec<Edit> {
                             .collect()
                     })
                     .unwrap_or_default();
-                Some(Edit { processor_id: processor.id.clone(), enabled: *enabled, params })
+                Some(StructuralEdit { processor_id: processor.id.clone(), enabled: *enabled, params })
             } else {
                 None
             }

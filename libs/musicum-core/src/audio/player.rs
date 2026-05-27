@@ -12,7 +12,7 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use structural_processor_sdk::{
-    chain::{build_chain, chain_output_duration, Edit},
+    chain::{build_chain, chain_output_duration, StructuralEdit},
     AudioSource,
 };
 
@@ -43,7 +43,7 @@ pub struct PlaybackEngine {
 impl PlaybackEngine {
     /// Construct a new playback engine for `path`, applying `edits` via
     /// `structural_processors::registry()`. Pass `edits: &[]` for raw file playback.
-    pub fn new(path: &Path, edits: &[Edit]) -> Result<Self> {
+    pub fn new(path: &Path, edits: &[StructuralEdit]) -> Result<Self> {
         let source = FileAudioSource::new(path)?;
         let raw_duration  = source.duration_secs();
         let sample_rate   = source.sample_rate();
@@ -138,13 +138,13 @@ impl PlaybackEngine {
     pub fn title(&self)       -> &str { &self.title }
 }
 
-fn build_fresh_chain(path: &Path, edits: &[Edit]) -> Result<Box<dyn AudioSource>> {
+fn build_fresh_chain(path: &Path, edits: &[StructuralEdit]) -> Result<Box<dyn AudioSource>> {
     let registry = structural_processors::registry();
     let source   = Box::new(FileAudioSource::new(path)?);
     Ok(build_chain(source, edits, &registry))
 }
 
-fn decode_loop(path: PathBuf, edits: Vec<Edit>, state: Arc<PlaybackState>) {
+fn decode_loop(path: PathBuf, edits: Vec<StructuralEdit>, state: Arc<PlaybackState>) {
     let mut chain = match build_fresh_chain(&path, &edits) {
         Ok(c) => c,
         Err(e) => {

@@ -3,7 +3,7 @@ use serde::Deserialize;
 use crate::{AudioSource, Params, ProcessorDescriptor, Registry};
 
 #[derive(Deserialize, Default, Clone)]
-pub struct Edit {
+pub struct StructuralEdit {
     #[serde(rename = "type")]
     pub processor_id: String,
     pub enabled: bool,
@@ -38,7 +38,7 @@ impl AudioSource for ProcessorSource {
 /// The returned `AudioSource` is the head of the chain; call `read_at` to pull samples.
 pub fn build_chain(
     source: Box<dyn AudioSource>,
-    edits: &[Edit],
+    edits: &[StructuralEdit],
     registry: &Registry,
 ) -> Box<dyn AudioSource> {
     edits.iter()
@@ -62,7 +62,7 @@ pub fn build_chain(
 }
 
 /// Compute the output duration (seconds) of a chain without constructing instances.
-pub fn chain_output_duration(raw_duration: f64, edits: &[Edit], registry: &Registry) -> f64 {
+pub fn chain_output_duration(raw_duration: f64, edits: &[StructuralEdit], registry: &Registry) -> f64 {
     edits.iter()
         .filter(|e| e.enabled)
         .fold(raw_duration, |dur, edit| {
@@ -86,7 +86,7 @@ pub fn validate_edit(registry: &Registry, processor_id: &str, params: &Params) -
 /// Map `t` forward through the edit chain. `duration` is the raw audio length in seconds.
 pub fn map_time_forward(
     registry: &Registry,
-    edits: &[Edit],
+    edits: &[StructuralEdit],
     t: f64,
     duration: f64,
 ) -> f64 {
@@ -105,7 +105,7 @@ pub fn map_time_forward(
 /// Map `t` backward through the edit chain. `duration` is the raw audio length in seconds.
 pub fn map_time_back(
     registry: &Registry,
-    edits: &[Edit],
+    edits: &[StructuralEdit],
     t: f64,
     duration: f64,
 ) -> f64 {
@@ -204,7 +204,7 @@ mod new_api_tests {
         ))
     }
 
-    fn edits(json: &str) -> Vec<Edit> {
+    fn edits(json: &str) -> Vec<StructuralEdit> {
         serde_json::from_str(json).unwrap()
     }
 

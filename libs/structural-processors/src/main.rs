@@ -4,7 +4,7 @@ use std::io::{self, Read};
 
 use structural_processor_sdk::{
     AudioSource, VecAudioSource, build_chain,
-    chain::{descriptors_json, Edit},
+    chain::{descriptors_json, StructuralEdit},
 };
 use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
 
@@ -48,7 +48,7 @@ fn main() {
 
     let mut edits_json = String::new();
     io::stdin().read_to_string(&mut edits_json).expect("failed to read stdin");
-    let edits: Vec<Edit> = serde_json::from_str(&edits_json).expect("invalid edits JSON");
+    let edits: Vec<StructuralEdit> = serde_json::from_str(&edits_json).expect("invalid edits JSON");
 
     let mut chain = build_chain(source, &edits, &structural_processors::registry());
     let output = chain.read_at(0.0, total);

@@ -33,11 +33,11 @@ mod integration_tests {
     use structural_processor_sdk::{
         build_chain, chain_output_duration, VecAudioSource, AudioSource,
         map_time_forward, map_time_back, validate_edit,
-        chain::Edit,
+        chain::StructuralEdit,
     };
     use std::collections::HashMap;
 
-    fn edits(json: &str) -> Vec<Edit> {
+    fn edits(json: &str) -> Vec<StructuralEdit> {
         serde_json::from_str(json).unwrap()
     }
 
