@@ -6,7 +6,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use musicum_core::{
-    audio::PlaybackEngine,
+    audio::{sidecar_entries_to_edits, PlaybackEngine},
     services::{clip_service, file_service},
     sidecar::ProcessorEntry,
 };
@@ -20,28 +20,6 @@ use ratatui::{
 };
 use sea_orm::DatabaseConnection;
 use structural_processor_sdk::chain::Edit;
-
-fn sidecar_entries_to_edits(entries: &[ProcessorEntry]) -> Vec<Edit> {
-    entries
-        .iter()
-        .filter_map(|e| {
-            if let ProcessorEntry::Structural { enabled, processor, .. } = e {
-                let params = processor
-                    .params
-                    .as_object()
-                    .map(|obj| {
-                        obj.iter()
-                            .filter_map(|(k, v)| v.as_f64().map(|f| (k.clone(), f)))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                Some(Edit { processor_id: processor.id.clone(), enabled: *enabled, params })
-            } else {
-                None
-            }
-        })
-        .collect()
-}
 
 fn format_processor_display(edits: &[Edit]) -> String {
     edits

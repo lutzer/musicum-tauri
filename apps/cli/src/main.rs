@@ -48,6 +48,8 @@ enum Commands {
         #[arg(long = "loop")]
         loop_mode: bool,
     },
+    /// Export a file or clip to an audio file
+    Export(commands::export::ExportArgs),
     /// Print config and resolved library paths
     Config,
 }
@@ -83,6 +85,7 @@ async fn main() -> Result<()> {
         Commands::Play { target, file, clip, loop_mode } => {
             commands::play::run(&db, target, file, clip, loop_mode).await?
         }
+        Commands::Export(args) => commands::export::run(&db, args).await?,
         Commands::Config => unreachable!(),
     }
 

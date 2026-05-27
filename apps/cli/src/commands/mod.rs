@@ -1,5 +1,6 @@
 pub mod clips;
 pub mod collections;
+pub mod export;
 pub mod files;
 pub mod play;
 pub mod processor_list_editor;
