@@ -1468,6 +1468,7 @@ name = "musicum-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "audio-plugin-sdk",
  "clap",
  "crossterm",
  "indicatif",

@@ -1,12 +1,13 @@
 use std::{future::Future, io, pin::Pin};
 
 use anyhow::Result;
+use audio_plugin_sdk::{PluginParameter, PluginRegistry};
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use musicum_core::edit::{EditKind, ProcessorEdit};
+use musicum_core::{edit::{EditKind, ProcessorEdit}, EditRegistry};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -23,8 +24,22 @@ pub type SaveFn<'a> = Box<dyn Fn(Vec<ProcessorEdit>) -> SaveResult<'a> + 'a>;
 
 #[derive(Clone)]
 struct ParamRow {
-    key:   String,
-    value: serde_json::Value,
+    key:     String,
+    value:   serde_json::Value,
+    is_bool: bool,
+}
+
+#[derive(Clone, PartialEq)]
+enum AvailableKind {
+    Structural,
+    Plugin,
+}
+
+#[derive(Clone)]
+struct AvailableType {
+    id:   String,
+    name: String,
+    kind: AvailableKind,
 }
 
 #[derive(PartialEq)]
@@ -43,7 +58,8 @@ enum Mode {
 struct EditorState {
     title:           String,
     processors:      Vec<ProcessorEdit>,
-    available_types: Vec<(String, String)>,
+    available_types: Vec<AvailableType>,
+    plugin_registry: PluginRegistry,
     proc_state:      ListState,
     param_state:     ListState,
     active_pane:     Pane,
@@ -55,15 +71,29 @@ struct EditorState {
 
 impl EditorState {
     fn new(title: String, processors: Vec<ProcessorEdit>) -> Self {
-        let registry = structural_processors::registry();
-        let mut available_types: Vec<(String, String)> = registry
-            .values()
-            .map(|e| {
-                let d = (e.descriptor)();
-                (d.id.to_string(), d.name.to_string())
-            })
-            .collect();
-        available_types.sort_by(|a, b| a.0.cmp(&b.0));
+        let edit_registry = EditRegistry::default();
+        let mut available_types: Vec<AvailableType> = Vec::new();
+
+        for entry in edit_registry.structural.values() {
+            let d = (entry.descriptor)();
+            available_types.push(AvailableType {
+                id:   d.id.to_string(),
+                name: d.name.to_string(),
+                kind: AvailableKind::Structural,
+            });
+        }
+
+        for (id, entry) in &edit_registry.plugins {
+            let d = (entry.descriptor)();
+            available_types.push(AvailableType {
+                id:   id.clone(),
+                name: d.name.to_string(),
+                kind: AvailableKind::Plugin,
+            });
+        }
+
+        available_types.sort_by(|a, b| a.id.cmp(&b.id));
+        let plugin_registry = edit_registry.plugins;
 
         let mut proc_state = ListState::default();
         if !processors.is_empty() {
@@ -73,6 +103,7 @@ impl EditorState {
             title,
             processors,
             available_types,
+            plugin_registry,
             proc_state,
             param_state: ListState::default(),
             active_pane: Pane::Processors,
@@ -96,17 +127,38 @@ impl EditorState {
             EditKind::Structural { params, .. } => params
                 .iter()
                 .map(|(k, v)| ParamRow {
-                    key:   k.clone(),
-                    value: serde_json::json!(v),
+                    key:     k.clone(),
+                    value:   serde_json::json!(v),
+                    is_bool: false,
                 })
                 .collect(),
-            EditKind::Plugin { params, .. } => params
-                .iter()
-                .map(|(k, v)| ParamRow {
-                    key:   k.clone(),
-                    value: serde_json::json!(v),
-                })
-                .collect(),
+            EditKind::Plugin { plugin_id, params } => {
+                let bool_keys: std::collections::HashSet<&str> = self
+                    .plugin_registry
+                    .get(plugin_id.as_str())
+                    .map(|entry| {
+                        let d = (entry.descriptor)();
+                        d.parameters
+                            .iter()
+                            .filter_map(|p| {
+                                if let PluginParameter::Bool { id, .. } = p {
+                                    Some(*id)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                params
+                    .iter()
+                    .map(|(k, v)| ParamRow {
+                        key:     k.clone(),
+                        value:   serde_json::json!(v),
+                        is_bool: bool_keys.contains(k.as_str()),
+                    })
+                    .collect()
+            }
         }
     }
 
@@ -209,31 +261,65 @@ impl EditorState {
         }
     }
 
-    fn add_processor(&mut self, type_id: &str) {
-        let registry = structural_processors::registry();
-        let Some(entry) = registry.values().find(|e| (e.descriptor)().id == type_id) else {
-            return;
-        };
-        let descriptor = (entry.descriptor)();
-        let mut params = std::collections::HashMap::new();
-        for p in descriptor.parameters {
-            let (id, val) = match p {
-                ParameterDescriptor::Time { id, default, .. } => (id, *default),
-                ParameterDescriptor::Int { id, default, .. } => (id, *default as f64),
-            };
-            params.insert(id.to_string(), val);
+    fn add_processor(&mut self, available: &AvailableType) {
+        match available.kind {
+            AvailableKind::Structural => {
+                let registry = structural_processors::registry();
+                let Some(entry) = registry.values().find(|e| (e.descriptor)().id == available.id)
+                else {
+                    return;
+                };
+                let descriptor = (entry.descriptor)();
+                let mut params = std::collections::HashMap::new();
+                for p in descriptor.parameters {
+                    let (id, val) = match p {
+                        ParameterDescriptor::Time { id, default, .. } => (id, *default),
+                        ParameterDescriptor::Int { id, default, .. } => (id, *default as f64),
+                    };
+                    params.insert(id.to_string(), val);
+                }
+                let new_entry = ProcessorEdit {
+                    uuid:    Uuid::new_v4(),
+                    enabled: true,
+                    kind:    EditKind::Structural {
+                        processor_id: available.id.clone(),
+                        params,
+                    },
+                };
+                let insert_at = self.proc_state.selected().map(|i| i + 1).unwrap_or(0);
+                self.processors.insert(insert_at, new_entry);
+                self.proc_state.select(Some(insert_at));
+            }
+            AvailableKind::Plugin => {
+                let Some(entry) = self.plugin_registry.get(&available.id) else {
+                    return;
+                };
+                let descriptor = (entry.descriptor)();
+                let mut params = std::collections::HashMap::new();
+                for p in descriptor.parameters {
+                    match p {
+                        PluginParameter::Float { id, default, .. } => {
+                            params.insert(id.to_string(), *default);
+                        }
+                        PluginParameter::Bool { id, default, .. } => {
+                            params.insert(id.to_string(), if *default { 1.0_f32 } else { 0.0_f32 });
+                        }
+                        PluginParameter::Action { .. } | PluginParameter::Canvas { .. } => {}
+                    }
+                }
+                let new_entry = ProcessorEdit {
+                    uuid:    Uuid::new_v4(),
+                    enabled: true,
+                    kind:    EditKind::Plugin {
+                        plugin_id: available.id.clone(),
+                        params,
+                    },
+                };
+                let insert_at = self.proc_state.selected().map(|i| i + 1).unwrap_or(0);
+                self.processors.insert(insert_at, new_entry);
+                self.proc_state.select(Some(insert_at));
+            }
         }
-        let new_entry = ProcessorEdit {
-            uuid:    Uuid::new_v4(),
-            enabled: true,
-            kind:    EditKind::Structural {
-                processor_id: type_id.to_string(),
-                params,
-            },
-        };
-        let insert_at = self.proc_state.selected().map(|i| i + 1).unwrap_or(0);
-        self.processors.insert(insert_at, new_entry);
-        self.proc_state.select(Some(insert_at));
     }
 
     fn delete_selected(&mut self) {
@@ -324,11 +410,12 @@ where
                     }
                 }
                 KeyCode::Enter => {
-                    if let Some((type_id, _)) = state.available_types.get(state.picker_idx).cloned() {
-                        state.add_processor(&type_id);
+                    if let Some(available) = state.available_types.get(state.picker_idx).cloned() {
+                        let id = available.id.clone();
+                        state.add_processor(&available);
                         state.mode = Mode::Normal;
                         match save(state.processors.clone()).await {
-                            Ok(_) => state.status_msg = Some(format!("added {type_id}")),
+                            Ok(_) => state.status_msg = Some(format!("added {id}")),
                             Err(e) => state.status_msg = Some(format!("error: {e}")),
                         }
                     }
@@ -400,8 +487,28 @@ where
                 (KeyCode::Down, _) | (KeyCode::Char('j'), _) => state.move_down(),
                 (KeyCode::Enter, _) => {
                     if state.active_pane == Pane::Params {
-                        state.enter_edit();
-                        state.mode = Mode::Editing;
+                        let params = state.params_for_selected();
+                        let selected = state.param_state.selected()
+                            .and_then(|i| params.get(i))
+                            .cloned();
+                        if let Some(row) = selected {
+                            if row.is_bool {
+                                let toggled = if row.value.as_f64().unwrap_or(0.0) != 0.0 {
+                                    0.0_f32
+                                } else {
+                                    1.0_f32
+                                };
+                                let key = row.key.clone();
+                                state.apply_edit_to_processors(&key, serde_json::json!(toggled));
+                                match save(state.processors.clone()).await {
+                                    Ok(_) => state.status_msg = Some(format!("{key} toggled")),
+                                    Err(e) => state.status_msg = Some(format!("error: {e}")),
+                                }
+                            } else {
+                                state.enter_edit();
+                                state.mode = Mode::Editing;
+                            }
+                        }
                     }
                 }
                 (KeyCode::Char('a'), _) if state.active_pane == Pane::Processors => {
@@ -496,14 +603,23 @@ fn draw_params(f: &mut Frame, state: &mut EditorState, area: Rect) {
             .iter()
             .enumerate()
             .map(|(i, row)| {
-                let style = if Some(i) == selected_param_idx {
+                let key_style = if Some(i) == selected_param_idx {
                     Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
+                let val_span = if row.is_bool {
+                    if row.value.as_f64().unwrap_or(0.0) != 0.0 {
+                        Span::styled("[on]", Style::default().fg(Color::Cyan))
+                    } else {
+                        Span::styled("[off]", Style::default().fg(Color::DarkGray))
+                    }
+                } else {
+                    Span::styled(row.value.to_string(), key_style)
+                };
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!("{}: ", row.key), style),
-                    Span::styled(row.value.to_string(), style),
+                    Span::styled(format!("{}: ", row.key), key_style),
+                    val_span,
                 ]))
             })
             .collect();
@@ -534,9 +650,18 @@ fn draw_params(f: &mut Frame, state: &mut EditorState, area: Rect) {
         let items: Vec<ListItem> = params
             .iter()
             .map(|row| {
+                let value_span = if row.is_bool {
+                    if row.value.as_f64().unwrap_or(0.0) != 0.0 {
+                        Span::styled("[on]", Style::default().fg(Color::Cyan))
+                    } else {
+                        Span::styled("[off]", Style::default().fg(Color::DarkGray))
+                    }
+                } else {
+                    Span::styled(row.value.to_string(), Style::default().fg(Color::Green))
+                };
                 ListItem::new(Line::from(vec![
                     Span::raw(format!("{}: ", row.key)),
-                    Span::styled(row.value.to_string(), Style::default().fg(Color::Green)),
+                    value_span,
                 ]))
             })
             .collect();
@@ -585,22 +710,27 @@ fn draw_footer(f: &mut Frame, state: &EditorState, area: Rect) {
 }
 
 fn draw_picker_overlay(f: &mut Frame, state: &EditorState, area: Rect) {
-    let popup = centered_rect(50, 60, area);
+    let popup = centered_rect(60, 60, area);
     f.render_widget(Clear, popup);
 
     let items: Vec<ListItem> = state
         .available_types
         .iter()
         .enumerate()
-        .map(|(i, (id, name))| {
-            let style = if i == state.picker_idx {
+        .map(|(i, avail)| {
+            let name_style = if i == state.picker_idx {
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
+            let badge = match avail.kind {
+                AvailableKind::Structural => "[structural]  ",
+                AvailableKind::Plugin     => "[audio-plugin]",
+            };
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{name} "), style),
-                Span::styled(format!("({id})"), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{badge} "), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{} ", avail.name), name_style),
+                Span::styled(format!("({})", avail.id), Style::default().fg(Color::DarkGray)),
             ]))
         })
         .collect();
