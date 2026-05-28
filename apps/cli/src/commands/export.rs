@@ -9,9 +9,9 @@ use musicum_core::{
         clip_service, file_service,
         export_service::{export_audio, ExportOptions},
     },
+    StructuralEdit,
 };
 use sea_orm::DatabaseConnection;
-use structural_processor_sdk::chain::StructuralEdit;
 
 use crate::output::{DetailItem, print_result};
 

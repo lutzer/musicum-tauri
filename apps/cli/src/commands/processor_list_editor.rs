@@ -1,13 +1,12 @@
 use std::{future::Future, io, pin::Pin};
 
 use anyhow::Result;
-use audio_plugin_sdk::{PluginParameter, PluginRegistry};
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use musicum_core::{edit::{EditKind, ProcessorEdit}, EditRegistry};
+use musicum_core::{edit::{EditKind, ProcessorEdit}, EditRegistry, EditType, ParamInfo};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -16,7 +15,6 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
     Frame, Terminal,
 };
-use structural_processor_sdk::processor::ParameterDescriptor;
 use uuid::Uuid;
 
 pub type SaveResult<'a> = Pin<Box<dyn Future<Output = Result<()>> + 'a>>;
@@ -59,7 +57,7 @@ struct EditorState {
     title:           String,
     processors:      Vec<ProcessorEdit>,
     available_types: Vec<AvailableType>,
-    plugin_registry: PluginRegistry,
+    edit_registry:   EditRegistry,
     proc_state:      ListState,
     param_state:     ListState,
     active_pane:     Pane,
@@ -72,28 +70,19 @@ struct EditorState {
 impl EditorState {
     fn new(title: String, processors: Vec<ProcessorEdit>) -> Self {
         let edit_registry = EditRegistry::default();
-        let mut available_types: Vec<AvailableType> = Vec::new();
-
-        for entry in edit_registry.structural.values() {
-            let d = (entry.descriptor)();
-            available_types.push(AvailableType {
-                id:   d.id.to_string(),
-                name: d.name.to_string(),
-                kind: AvailableKind::Structural,
-            });
-        }
-
-        for (id, entry) in &edit_registry.plugins {
-            let d = (entry.descriptor)();
-            available_types.push(AvailableType {
-                id:   id.clone(),
-                name: d.name.to_string(),
-                kind: AvailableKind::Plugin,
-            });
-        }
-
+        let mut available_types: Vec<AvailableType> = edit_registry
+            .list_entries()
+            .into_iter()
+            .map(|e| AvailableType {
+                id:   e.id,
+                name: e.name.to_string(),
+                kind: match e.edit_type {
+                    EditType::Structural => AvailableKind::Structural,
+                    EditType::Plugin     => AvailableKind::Plugin,
+                },
+            })
+            .collect();
         available_types.sort_by(|a, b| a.id.cmp(&b.id));
-        let plugin_registry = edit_registry.plugins;
 
         let mut proc_state = ListState::default();
         if !processors.is_empty() {
@@ -103,7 +92,7 @@ impl EditorState {
             title,
             processors,
             available_types,
-            plugin_registry,
+            edit_registry,
             proc_state,
             param_state: ListState::default(),
             active_pane: Pane::Processors,
@@ -134,20 +123,12 @@ impl EditorState {
                 .collect(),
             EditKind::Plugin { plugin_id, params } => {
                 let bool_keys: std::collections::HashSet<&str> = self
-                    .plugin_registry
-                    .get(plugin_id.as_str())
+                    .edit_registry
+                    .get_entry(plugin_id.as_str())
                     .map(|entry| {
-                        let d = (entry.descriptor)();
-                        d.parameters
-                            .iter()
-                            .filter_map(|p| {
-                                if let PluginParameter::Bool { id, .. } = p {
-                                    Some(*id)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect()
+                        entry.parameters.iter().filter_map(|p| {
+                            if let ParamInfo::Bool { id, .. } = p { Some(*id) } else { None }
+                        }).collect()
                     })
                     .unwrap_or_default();
                 params
@@ -262,64 +243,44 @@ impl EditorState {
     }
 
     fn add_processor(&mut self, available: &AvailableType) {
+        let Some(entry) = self.edit_registry.get_entry(&available.id) else { return };
+        let insert_at = self.proc_state.selected().map(|i| i + 1).unwrap_or(0);
         match available.kind {
             AvailableKind::Structural => {
-                let registry = structural_processors::registry();
-                let Some(entry) = registry.values().find(|e| (e.descriptor)().id == available.id)
-                else {
-                    return;
-                };
-                let descriptor = (entry.descriptor)();
                 let mut params = std::collections::HashMap::new();
-                for p in descriptor.parameters {
+                for p in &entry.parameters {
                     let (id, val) = match p {
-                        ParameterDescriptor::Time { id, default, .. } => (id, *default),
-                        ParameterDescriptor::Int { id, default, .. } => (id, *default as f64),
+                        ParamInfo::Time { id, default, .. } => (*id, *default),
+                        ParamInfo::Int  { id, default, .. } => (*id, *default as f64),
+                        _ => continue,
                     };
                     params.insert(id.to_string(), val);
                 }
-                let new_entry = ProcessorEdit {
+                self.processors.insert(insert_at, ProcessorEdit {
                     uuid:    Uuid::new_v4(),
                     enabled: true,
-                    kind:    EditKind::Structural {
-                        processor_id: available.id.clone(),
-                        params,
-                    },
-                };
-                let insert_at = self.proc_state.selected().map(|i| i + 1).unwrap_or(0);
-                self.processors.insert(insert_at, new_entry);
-                self.proc_state.select(Some(insert_at));
+                    kind:    EditKind::Structural { processor_id: available.id.clone(), params },
+                });
             }
             AvailableKind::Plugin => {
-                let Some(entry) = self.plugin_registry.get(&available.id) else {
-                    return;
-                };
-                let descriptor = (entry.descriptor)();
                 let mut params = std::collections::HashMap::new();
-                for p in descriptor.parameters {
+                for p in &entry.parameters {
                     match p {
-                        PluginParameter::Float { id, default, .. } => {
-                            params.insert(id.to_string(), *default);
-                        }
-                        PluginParameter::Bool { id, default, .. } => {
+                        ParamInfo::Float { id, default, .. } => { params.insert(id.to_string(), *default); }
+                        ParamInfo::Bool  { id, default, .. } => {
                             params.insert(id.to_string(), if *default { 1.0_f32 } else { 0.0_f32 });
                         }
-                        PluginParameter::Action { .. } | PluginParameter::Canvas { .. } => {}
+                        _ => {}
                     }
                 }
-                let new_entry = ProcessorEdit {
+                self.processors.insert(insert_at, ProcessorEdit {
                     uuid:    Uuid::new_v4(),
                     enabled: true,
-                    kind:    EditKind::Plugin {
-                        plugin_id: available.id.clone(),
-                        params,
-                    },
-                };
-                let insert_at = self.proc_state.selected().map(|i| i + 1).unwrap_or(0);
-                self.processors.insert(insert_at, new_entry);
-                self.proc_state.select(Some(insert_at));
+                    kind:    EditKind::Plugin { plugin_id: available.id.clone(), params },
+                });
             }
         }
+        self.proc_state.select(Some(insert_at));
     }
 
     fn delete_selected(&mut self) {

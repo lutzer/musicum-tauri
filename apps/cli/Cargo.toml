@@ -10,9 +10,6 @@ path = "src/main.rs"
 
 [dependencies]
 musicum-core             = { path = "../../libs/musicum-core" }
-audio-plugin-sdk         = { path = "../../libs/audio-plugin-sdk" }
-structural-processors    = { path = "../../libs/structural-processors" }
-structural-processor-sdk = { path = "../../libs/structural-processor-sdk" }
 clap                     = { version = "4", features = ["derive"] }
 sea-orm.workspace        = true
 tokio.workspace          = true

@@ -1,52 +1,34 @@
 use std::{
     collections::VecDeque,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::Duration,
 };
 
 use anyhow::{anyhow, Context, Result};
-use audio_plugin_sdk::PluginProcessor;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use structural_processor_sdk::{
-    chain::{build_chain, chain_output_duration, StructuralEdit},
-    AudioSource,
-};
+use structural_processor_sdk::{chain::{chain_output_duration, StructuralEdit}, AudioSource};
 use uuid::Uuid;
 
+use super::processor_chain::{build_plugin_handles, decode_loop, PluginHandle, BUFFER_CAPACITY};
 use crate::audio::registry::EditRegistry;
 use crate::audio::source::FileAudioSource;
 use crate::edit::{EditKind, ProcessorEdit};
 
-// ~2 seconds of stereo audio at 48 kHz
-const BUFFER_CAPACITY: usize = 48_000 * 2 * 2;
-const CHUNK_SAMPLES: usize = 4_096;
-
-// ── Plugin handle ─────────────────────────────────────────────────────────────
-
-/// Shared handle for a single plugin instance.
-/// Owned by `PlaybackEngine` and also cloned into the decode thread.
-struct PluginHandle {
-    uuid:      Uuid,
-    enabled:   AtomicBool,
-    processor: Mutex<Box<dyn PluginProcessor>>,
-}
-
 // ── Playback state ────────────────────────────────────────────────────────────
 
-struct PlaybackState {
-    paused:       AtomicBool,
-    looping:      AtomicBool,
-    finished:     AtomicBool,
-    seek_request: Mutex<Option<f64>>,
-    position:     AtomicU64,
-    total_frames: AtomicU64,
-    sample_rate:  u32,
-    buffer:       Mutex<VecDeque<f32>>,
+pub(super) struct PlaybackState {
+    pub(super) paused:       AtomicBool,
+    pub(super) looping:      AtomicBool,
+    pub(super) finished:     AtomicBool,
+    pub(super) seek_request: Mutex<Option<f64>>,
+    pub(super) position:     AtomicU64,
+    pub(super) total_frames: AtomicU64,
+    pub(super) sample_rate:  u32,
+    pub(super) buffer:       Mutex<VecDeque<f32>>,
 }
 
 // ── PlaybackEngine ────────────────────────────────────────────────────────────
@@ -93,25 +75,7 @@ impl PlaybackEngine {
         let output_duration = chain_output_duration(raw_duration, &structural_edits, &registry.structural);
         let total_frames    = (output_duration * sample_rate as f64) as u64;
 
-        // Build plugin handles (only enabled plugins get an instance)
-        let mut plugin_handles: Vec<Arc<PluginHandle>> = Vec::new();
-        for edit in edits {
-            if let EditKind::Plugin { plugin_id, params } = &edit.kind {
-                if let Some(entry) = registry.plugins.get(plugin_id) {
-                    let mut instance = (entry.create)();
-                    for (id, &val) in params {
-                        instance.set_parameter(id, val);
-                    }
-                    plugin_handles.push(Arc::new(PluginHandle {
-                        uuid:      edit.uuid,
-                        enabled:   AtomicBool::new(edit.enabled),
-                        processor: Mutex::new(instance),
-                    }));
-                } else {
-                    eprintln!("warning: unknown plugin '{plugin_id}' — skipped");
-                }
-            }
-        }
+        let plugin_handles = build_plugin_handles(edits, registry);
 
         // Structural snapshot for set_edit_param
         let structural_snapshot: Vec<ProcessorEdit> = edits
@@ -264,125 +228,6 @@ impl PlaybackEngine {
                     break;
                 }
             }
-        }
-    }
-}
-
-// ── Decode helpers ────────────────────────────────────────────────────────────
-
-fn build_fresh_chain(
-    path: &Path,
-    edits: &[StructuralEdit],
-    registry: &structural_processor_sdk::Registry,
-) -> Result<Box<dyn AudioSource>> {
-    let source = Box::new(FileAudioSource::new(path)?);
-    Ok(build_chain(source, edits, registry))
-}
-
-fn decode_loop(
-    path: PathBuf,
-    structural_edits: Vec<StructuralEdit>,
-    plugin_handles: Vec<Arc<PluginHandle>>,
-    state: Arc<PlaybackState>,
-) {
-    let registry = structural_processors::registry();
-
-    let mut chain = match build_fresh_chain(&path, &structural_edits, &registry) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("decode init error: {e}");
-            state.finished.store(true, Ordering::Relaxed);
-            return;
-        }
-    };
-
-    let sample_rate = state.sample_rate;
-    let ch = {
-        let probe = FileAudioSource::new(&path);
-        probe.map(|s| s.channels()).unwrap_or(2)
-    } as usize;
-
-    let mut cursor_secs = 0.0_f64;
-    let total_secs = state.total_frames.load(Ordering::Relaxed) as f64 / sample_rate as f64;
-
-    loop {
-        // ── Seek ──────────────────────────────────────────────────────────────
-        if let Ok(mut req) = state.seek_request.lock() {
-            if let Some(target) = req.take() {
-                match build_fresh_chain(&path, &structural_edits, &registry) {
-                    Ok(c) => {
-                        chain = c;
-                        cursor_secs = target;
-                        let frame_pos = (target * sample_rate as f64) as u64;
-                        state.position.store(frame_pos, Ordering::Relaxed);
-                        if let Ok(mut buf) = state.buffer.lock() { buf.clear(); }
-                        // Reset plugin state (flush delay lines, reverb tails)
-                        for handle in &plugin_handles {
-                            if let Ok(mut p) = handle.processor.lock() { p.reset(); }
-                        }
-                    }
-                    Err(e) => eprintln!("seek chain rebuild error: {e}"),
-                }
-            }
-        }
-
-        if state.paused.load(Ordering::Relaxed) {
-            thread::sleep(Duration::from_millis(10));
-            continue;
-        }
-
-        // ── End of stream ─────────────────────────────────────────────────────
-        if cursor_secs >= total_secs {
-            while state.buffer.lock().map(|b| b.len()).unwrap_or(1) > 0 {
-                thread::sleep(Duration::from_millis(5));
-            }
-            state.position.store(0, Ordering::Relaxed);
-            if !state.looping.load(Ordering::Relaxed) {
-                state.paused.store(true, Ordering::Relaxed);
-            }
-            chain = match build_fresh_chain(&path, &structural_edits, &registry) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("decode rebuild error: {e}"); state.finished.store(true, Ordering::Relaxed); return; }
-            };
-            cursor_secs = 0.0;
-            continue;
-        }
-
-        // ── Buffer full — wait ────────────────────────────────────────────────
-        if state.buffer.lock().map(|b| b.len()).unwrap_or(0) >= BUFFER_CAPACITY {
-            thread::sleep(Duration::from_millis(5));
-            continue;
-        }
-
-        // ── Decode + apply plugins ────────────────────────────────────────────
-        let mut samples = chain.read_at(cursor_secs, CHUNK_SAMPLES);
-        if samples.is_empty() {
-            while state.buffer.lock().map(|b| b.len()).unwrap_or(1) > 0 {
-                thread::sleep(Duration::from_millis(5));
-            }
-            state.position.store(0, Ordering::Relaxed);
-            if !state.looping.load(Ordering::Relaxed) {
-                state.paused.store(true, Ordering::Relaxed);
-            }
-            chain = match build_fresh_chain(&path, &structural_edits, &registry) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("decode rebuild error: {e}"); state.finished.store(true, Ordering::Relaxed); return; }
-            };
-            cursor_secs = 0.0;
-            continue;
-        }
-
-        // Apply plugin chain in order
-        for handle in &plugin_handles {
-            if !handle.enabled.load(Ordering::Relaxed) { continue; }
-            if let Ok(mut plugin) = handle.processor.lock() {
-                plugin.process(&mut samples, ch, sample_rate as f32, cursor_secs);
-            }
-        }
-
-        cursor_secs += samples.len() as f64 / (sample_rate as f64 * ch as f64);
-        if let Ok(mut buf) = state.buffer.lock() {
-            buf.extend(&samples);
         }
     }
 }

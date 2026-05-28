@@ -3,11 +3,11 @@ use clap::{Args, Subcommand};
 use musicum_core::{
     deserialize_processor_edits,
     edit::{EditKind, ProcessorEdit},
+    EditRegistry, EditType, ParamInfo,
     services::preset_service,
 };
 use sea_orm::DatabaseConnection;
 use slug::slugify;
-use structural_processor_sdk::processor::ParameterDescriptor;
 use uuid::Uuid;
 
 use crate::output::{DetailItem::Field, print_detail, print_json, print_result, print_section_header, print_table};
@@ -137,12 +137,14 @@ pub async fn run(db: &DatabaseConnection, _catalog_dir: &std::path::Path, args: 
         }
 
         PresetsCommand::AddProcessor { preset_slug, processor_type } => {
-            let registry = structural_processors::registry();
-            let entry = registry
-                .values()
-                .find(|e| (e.descriptor)().id == processor_type)
+            let reg = EditRegistry::default();
+            let all_entries = reg.list_entries();
+            let structural: Vec<_> = all_entries.iter()
+                .filter(|e| matches!(e.edit_type, EditType::Structural))
+                .collect();
+            let entry = structural.iter().find(|e| e.id == processor_type)
                 .ok_or_else(|| {
-                    let mut valid: Vec<&str> = registry.values().map(|e| (e.descriptor)().id).collect();
+                    let mut valid: Vec<&str> = structural.iter().map(|e| e.id.as_str()).collect();
                     valid.sort_unstable();
                     anyhow::anyhow!(
                         "unknown processor type '{}'. Valid types: {}",
@@ -151,12 +153,12 @@ pub async fn run(db: &DatabaseConnection, _catalog_dir: &std::path::Path, args: 
                     )
                 })?;
 
-            let descriptor = (entry.descriptor)();
             let mut default_params = std::collections::HashMap::new();
-            for p in descriptor.parameters {
+            for p in &entry.parameters {
                 let (param_id, val) = match p {
-                    ParameterDescriptor::Time { id, default, .. } => (id, *default),
-                    ParameterDescriptor::Int { id, default, .. } => (id, *default as f64),
+                    ParamInfo::Time { id, default, .. } => (*id, *default),
+                    ParamInfo::Int  { id, default, .. } => (*id, *default as f64),
+                    _ => continue,
                 };
                 default_params.insert(param_id.to_string(), val);
             }

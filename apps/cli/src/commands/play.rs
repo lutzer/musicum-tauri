@@ -9,7 +9,7 @@ use musicum_core::{
     audio::structural_edits_from,
     deserialize_processor_edits,
     edit::ProcessorEdit,
-    EditRegistry, PlaybackEngine,
+    EditRegistry, PlaybackEngine, StructuralEdit,
     services::{clip_service, file_service},
 };
 use ratatui::{
@@ -21,7 +21,6 @@ use ratatui::{
     Frame, Terminal, TerminalOptions, Viewport,
 };
 use sea_orm::DatabaseConnection;
-use structural_processor_sdk::chain::StructuralEdit;
 
 fn format_processor_display(edits: &[StructuralEdit]) -> String {
     edits

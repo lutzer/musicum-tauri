@@ -1,3 +1,4 @@
+mod processor_chain;
 pub mod player;
 pub mod registry;
 pub mod source;
@@ -6,7 +7,7 @@ use crate::edit::{EditKind, ProcessorEdit};
 use structural_processor_sdk::chain::StructuralEdit;
 
 pub use player::PlaybackEngine;
-pub use registry::EditRegistry;
+pub use registry::{EditEntry, EditRegistry, EditType, ParamInfo};
 pub use source::FileAudioSource;
 
 /// Extract structural edits from a `ProcessorEdit` slice.
