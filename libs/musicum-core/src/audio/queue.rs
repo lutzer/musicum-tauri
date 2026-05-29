@@ -39,6 +39,7 @@ impl PlaybackQueue {
     pub fn current_index(&self)  -> usize               { self.current_index }
     pub fn total(&self)          -> usize                { self.items.len() }
     pub fn current_title(&self)  -> &str                { &self.items[self.current_index].title }
+    pub fn titles(&self)         -> Vec<&str>           { self.items.iter().map(|i| i.title.as_str()).collect() }
 
     pub fn next(&mut self) -> bool {
         if self.current_index + 1 >= self.items.len() {

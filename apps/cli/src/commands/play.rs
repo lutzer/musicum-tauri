@@ -17,11 +17,13 @@ use ratatui::{
     layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Gauge, Paragraph},
+    widgets::Paragraph,
     Frame, Terminal, TerminalOptions, Viewport,
 };
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
+
+const MAX_QUEUE_VISIBLE: usize = 6;
 
 fn format_processor_display(edits: &[StructuralEdit]) -> String {
     edits
@@ -162,27 +164,34 @@ async fn resolve_target(
 
 fn run_player(
     mut queue: PlaybackQueue,
-    collection_title: Option<String>,
+    _collection_title: Option<String>,
     processor_display: String,
 ) -> Result<()> {
     enable_raw_mode()?;
     let backend = CrosstermBackend::new(io::stdout());
 
-    let in_collection = collection_title.is_some();
-    let base_height = 3u16
+    let queue_rows = queue.total().min(MAX_QUEUE_VISIBLE) as u16;
+    let base_height: u16 = 5  // status, bar, time, hints, separator
         + u16::from(!processor_display.is_empty())
-        + u16::from(in_collection)
-        + u16::from(in_collection);
+        + queue_rows;
 
     let mut terminal = Terminal::with_options(
         backend,
         TerminalOptions { viewport: Viewport::Inline(base_height) },
     )?;
 
+    let mut queue_scroll: usize = 0;
     let mut queue_exhausted = false;
 
     loop {
-        terminal.draw(|f| draw(f, &queue, &collection_title, &processor_display, queue_exhausted))?;
+        let ci = queue.current_index();
+        if ci < queue_scroll {
+            queue_scroll = ci;
+        } else if ci >= queue_scroll + MAX_QUEUE_VISIBLE {
+            queue_scroll = ci + 1 - MAX_QUEUE_VISIBLE;
+        }
+
+        terminal.draw(|f| draw(f, &queue, &processor_display, queue_exhausted, queue_scroll))?;
 
         if !queue_exhausted && queue.advance_if_finished() {
             // engine replaced; loop continues
@@ -200,19 +209,29 @@ fn run_player(
                     _ if queue_exhausted => {}
                     (KeyCode::Char('p'), _) => queue.engine_mut().toggle_pause(),
                     (KeyCode::Char('l'), _) => queue.engine_mut().toggle_loop(),
-                    (KeyCode::Right, KeyModifiers::NONE) => {
-                        let pos = queue.engine().position_secs();
-                        queue.engine_mut().seek(pos + 5.0);
-                    }
-                    (KeyCode::Left, KeyModifiers::NONE) => {
-                        let pos = queue.engine().position_secs();
-                        queue.engine_mut().seek((pos - 5.0).max(0.0));
-                    }
-                    (KeyCode::Right, KeyModifiers::SHIFT) => { queue.next(); }
-                    (KeyCode::Left,  KeyModifiers::SHIFT) => {
+                    (KeyCode::Up, KeyModifiers::NONE) => {
                         if queue.prev() && queue_exhausted {
                             queue_exhausted = false;
                         }
+                    }
+                    (KeyCode::Down, KeyModifiers::NONE) => {
+                        queue.next();
+                    }
+                    (KeyCode::Right, KeyModifiers::NONE) => {
+                        let pos = queue.engine().position_secs();
+                        queue.engine_mut().seek(pos + 3.0);
+                    }
+                    (KeyCode::Left, KeyModifiers::NONE) => {
+                        let pos = queue.engine().position_secs();
+                        queue.engine_mut().seek((pos - 3.0).max(0.0));
+                    }
+                    (KeyCode::Right, KeyModifiers::SHIFT) => {
+                        let pos = queue.engine().position_secs();
+                        queue.engine_mut().seek(pos + 15.0);
+                    }
+                    (KeyCode::Left, KeyModifiers::SHIFT) => {
+                        let pos = queue.engine().position_secs();
+                        queue.engine_mut().seek((pos - 15.0).max(0.0));
                     }
                     _ => {}
                 }
@@ -228,42 +247,36 @@ fn run_player(
 fn draw(
     f: &mut Frame,
     queue: &PlaybackQueue,
-    collection_title: &Option<String>,
     processor_display: &str,
     queue_exhausted: bool,
+    queue_scroll: usize,
 ) {
-    let engine = queue.engine();
-    let pos = engine.position_secs();
-    let dur = engine.duration_secs();
-    let paused = engine.is_paused();
-    let in_collection = collection_title.is_some();
-
+    let pos = queue.engine().position_secs();
+    let dur = queue.engine().duration_secs();
+    let queue_rows = queue.total().min(MAX_QUEUE_VISIBLE);
     let show_processors = !processor_display.is_empty();
-    let mut constraints = Vec::new();
-    if in_collection  { constraints.push(Constraint::Length(1)); }
-    constraints.push(Constraint::Length(1));
-    constraints.push(Constraint::Length(1));
-    if show_processors { constraints.push(Constraint::Length(1)); }
-    constraints.push(Constraint::Length(1));
-    if in_collection  { constraints.push(Constraint::Length(1)); }
+
+    let mut constraints = vec![
+        Constraint::Length(1), // status + title
+        Constraint::Length(1), // progress bar
+        Constraint::Length(1), // time row
+        Constraint::Length(1), // hints
+    ];
+    if show_processors {
+        constraints.push(Constraint::Length(1));
+    }
+    constraints.push(Constraint::Length(1)); // separator
+    for _ in 0..queue_rows {
+        constraints.push(Constraint::Length(1));
+    }
 
     let areas = Layout::vertical(constraints).split(f.area());
     let mut area_idx = 0usize;
 
-    if let Some(title) = collection_title {
-        let badge = format!("{}/{}", queue.current_index() + 1, queue.total());
-        let header = Line::from(vec![
-            Span::styled(title.as_str(), Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("  "),
-            Span::styled(badge, Style::default().fg(Color::DarkGray)),
-        ]);
-        f.render_widget(Paragraph::new(header), areas[area_idx]);
-        area_idx += 1;
-    }
-
+    // status + title
     let (status_icon, status_color) = if queue_exhausted {
         ("■", Color::DarkGray)
-    } else if paused {
+    } else if queue.engine().is_paused() {
         ("⏸", Color::Yellow)
     } else {
         ("▶", Color::Green)
@@ -276,16 +289,41 @@ fn draw(
     f.render_widget(Paragraph::new(title_line), areas[area_idx]);
     area_idx += 1;
 
+    // progress bar
     let ratio = if dur > 0.0 { (pos / dur).clamp(0.0, 1.0) } else { 0.0 };
+    let bar_width = areas[area_idx].width as usize;
+    let filled = (ratio * bar_width as f64).floor() as usize;
+    let unfilled = bar_width.saturating_sub(filled);
+    let bar_str = format!("{}{}", "█".repeat(filled), "░".repeat(unfilled));
     f.render_widget(
-        Gauge::default()
-            .gauge_style(Style::default().fg(Color::Cyan))
-            .ratio(ratio)
-            .label(format!("{} / {}", fmt_duration(pos), fmt_duration(dur))),
+        Paragraph::new(bar_str).style(Style::default().fg(Color::White)),
         areas[area_idx],
     );
     area_idx += 1;
 
+    // time row
+    let elapsed = fmt_duration(pos);
+    let total = fmt_duration(dur);
+    let time_width = areas[area_idx].width as usize;
+    let gap = time_width.saturating_sub(elapsed.len() + total.len());
+    let time_str = format!("{}{}{}", elapsed, " ".repeat(gap), total);
+    f.render_widget(
+        Paragraph::new(time_str).style(Style::default().fg(Color::DarkGray)),
+        areas[area_idx],
+    );
+    area_idx += 1;
+
+    // hints
+    let loop_color = if queue.engine().is_looping() { Color::Cyan } else { Color::DarkGray };
+    let hints = Line::from(vec![
+        Span::styled("[p] pause  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("[l] loop  ", Style::default().fg(loop_color)),
+        Span::styled("[↑↓] skip  [←/→] 3s  [S←/S→] 15s  [q] quit", Style::default().fg(Color::DarkGray)),
+    ]);
+    f.render_widget(Paragraph::new(hints), areas[area_idx]);
+    area_idx += 1;
+
+    // optional processors
     if show_processors {
         f.render_widget(
             Paragraph::new(processor_display).style(Style::default().fg(Color::DarkGray)),
@@ -294,20 +332,30 @@ fn draw(
         area_idx += 1;
     }
 
-    let loop_color = if engine.is_looping() { Color::Cyan } else { Color::DarkGray };
-    let base_hints = Line::from(vec![
-        Span::styled("[p] pause  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("[l] loop  ", Style::default().fg(loop_color)),
-        Span::styled("[←/→] seek 5s  [q] quit", Style::default().fg(Color::DarkGray)),
-    ]);
-    f.render_widget(Paragraph::new(base_hints), areas[area_idx]);
+    // separator
+    let sep = "─".repeat(areas[area_idx].width as usize);
+    f.render_widget(
+        Paragraph::new(sep).style(Style::default().fg(Color::DarkGray)),
+        areas[area_idx],
+    );
     area_idx += 1;
 
-    if in_collection {
-        let skip_hints = Line::from(vec![
-            Span::styled("[S←/S→] prev/next clip", Style::default().fg(Color::DarkGray)),
-        ]);
-        f.render_widget(Paragraph::new(skip_hints), areas[area_idx]);
+    // queue list
+    let titles = queue.titles();
+    let visible = &titles[queue_scroll..(queue_scroll + queue_rows).min(titles.len())];
+    let ci = queue.current_index();
+    for (i, title) in visible.iter().enumerate() {
+        let abs_idx = queue_scroll + i;
+        let line = if abs_idx == ci {
+            Line::from(vec![
+                Span::raw("▶ "),
+                Span::styled(*title, Style::default().add_modifier(Modifier::BOLD)),
+            ])
+        } else {
+            Line::from(vec![Span::raw(format!("  {title}"))])
+        };
+        f.render_widget(Paragraph::new(line), areas[area_idx]);
+        area_idx += 1;
     }
 }
 
