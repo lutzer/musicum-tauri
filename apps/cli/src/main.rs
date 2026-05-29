@@ -55,11 +55,28 @@ enum Commands {
     Export(commands::export::ExportArgs),
     /// Print config and resolved library paths
     Config,
+    /// Generate shell completion script
+    Completions {
+        /// Shell to generate completions for (zsh, bash)
+        shell: String,
+    },
+    /// Internal: list slugs for shell completion
+    #[command(hide = true, name = "_complete-slugs")]
+    CompleteSlugs {
+        /// Comma-separated slug types: file, clip, collection, preset
+        #[arg(long = "type")]
+        slug_type: String,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if let Commands::Completions { shell } = &cli.command {
+        commands::completions::run_completions::<Cli>(shell)?;
+        return Ok(());
+    }
 
     let paths = if let Some(lib) = cli.library {
         LibraryPaths::from_override(&lib)
@@ -90,6 +107,10 @@ async fn main() -> Result<()> {
         }
         Commands::Export(args) => commands::export::run(&db, args).await?,
         Commands::Config => unreachable!(),
+        Commands::CompleteSlugs { slug_type } => {
+            commands::completions::run_complete_slugs(&db, &slug_type).await?
+        }
+        Commands::Completions { .. } => unreachable!(),
     }
 
     Ok(())
