@@ -35,12 +35,13 @@ libs/structural-processors/
 - **Sidecars are source of truth.** The SQLite DB is a queryable index rebuilt from
   `.musicum.json` sidecars. Don't treat the DB as canonical. Propagate sidecar changes
   to the in-memory library state immediately; full sync only for new/removed files.
-- **ffmpeg is a system dependency.** Required only for clip caching (`cache_clip`).
+- **ffmpeg is a system dependency.** Required only for MP3 export.
 - **Audio plugin crates need dual crate-type.** Each plugin/processor `Cargo.toml` must
   have `crate-type = ["cdylib", "rlib"]` — `cdylib` for WASM, `rlib` for native linkage.
-- **Audio Engine applys processors and plugins** to the source audio files. the processors and plugins (Edits) are defined in the clips. Plugin parameters can be adjusted while the clip is playing, so make sure to design the audio engine taking this into account. A second audio pipeline is present for caching clips in a background operation.
+- **Audio Engine applies processors and plugins** to the source audio files. Edits are defined on clips; plugin parameters can be adjusted while playing. Design any engine changes with live-parameter-update in mind.
 - **Logic goes in musicum-core.** CLI is display-only; all business logic lives in the core lib.
 - **CLI output style.** Reuse output functions so all commands share consistent formatting.
+- **Shell completion slug registry.** When adding a subcommand with slug positional args, add an entry to `SLUG_COMPLETIONS` in `apps/cli/src/commands/completions.rs`. No other file needs editing for completion to work.
 
 ## Supplemental docs
 - `docs/plans/specs/2026-05-22-tauri-greenfield-setup.md` — full architecture & DB schema
