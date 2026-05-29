@@ -17,7 +17,7 @@ use ratatui::{
     layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, Borders, Padding, Paragraph},
     Frame, Terminal, TerminalOptions, Viewport,
 };
 use sea_orm::DatabaseConnection;
@@ -171,7 +171,7 @@ fn run_player(
     let backend = CrosstermBackend::new(io::stdout());
 
     let queue_rows = queue.total().min(MAX_QUEUE_VISIBLE) as u16;
-    let base_height: u16 = 5  // status, bar, time, hints, separator
+    let base_height: u16 = 5 + 2  // status, bar, time, hints, separator + top/bottom border
         + u16::from(!processor_display.is_empty())
         + queue_rows;
 
@@ -270,7 +270,10 @@ fn draw(
         constraints.push(Constraint::Length(1));
     }
 
-    let areas = Layout::vertical(constraints).split(f.area());
+    let border = Block::default().borders(Borders::ALL).padding(Padding::horizontal(1));
+    f.render_widget(border.clone(), f.area());
+    let inner = border.inner(f.area());
+    let areas = Layout::vertical(constraints).split(inner);
     let mut area_idx = 0usize;
 
     // status + title
