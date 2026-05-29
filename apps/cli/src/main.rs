@@ -36,9 +36,9 @@ enum Commands {
     Processors(commands::processors::ProcessorsArgs),
     /// Play a file or clip (slug or file path)
     Play {
-        /// Slug or file path to play (omit when using --collection)
+        /// Slug or file path to play; also resolves collection slugs automatically
         target: Option<String>,
-        /// Play all clips in a collection by slug
+        /// Force resolution as a collection (use when slug is ambiguous across types)
         #[arg(long, conflicts_with_all = ["file", "clip"])]
         collection: Option<String>,
         /// Resolve target as a file slug (skips clip lookup)

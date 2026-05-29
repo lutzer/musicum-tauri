@@ -51,43 +51,67 @@ pub async fn run(
     let registry = Arc::new(EditRegistry::default());
 
     if let Some(slug) = collection {
-        let (col, clips) = collection_service::get_collection_with_clips(db, &slug)
+        let (title, items) = build_collection_queue(db, &slug)
             .await
             .map_err(|_| anyhow!("no collection with slug '{slug}'"))?;
-
-        if clips.is_empty() {
-            return Err(anyhow!("collection '{slug}' has no clips"));
-        }
-
-        let mut items: Vec<QueueItem> = Vec::with_capacity(clips.len());
-        for clip in &clips {
-            let file = file_service::get_file_by_id(db, &clip.file_id)
-                .await
-                .map_err(|_| anyhow!("file not found for clip '{}'", clip.slug))?;
-            let edits = deserialize_processor_edits(&clip.processors);
-            items.push(QueueItem {
-                title: clip.title.clone(),
-                path:  file.path.clone(),
-                edits,
-            });
-        }
-
         let queue = PlaybackQueue::new(items, Arc::clone(&registry))?;
         if loop_mode { queue.engine().toggle_loop(); }
-        return run_player(queue, Some(col.title), String::new());
+        return run_player(queue, Some(title), String::new());
     }
 
     let target = target.ok_or_else(|| anyhow!("provide a target or --collection <slug>"))?;
-    let (path, edits) = resolve_target(db, &target, force_file, force_clip).await?;
-    let structural = structural_edits_from(&edits);
-    let processor_display = format_processor_display(&structural);
 
+    // Force modes: only the requested entity type, no collection fallback.
+    if force_file || force_clip {
+        let (path, edits) = resolve_target(db, &target, force_file, force_clip).await?;
+        return play_single_clip(path, edits, loop_mode, registry);
+    }
+
+    // Auto-resolve: file slug → clip slug → file path → collection slug.
+    if let Ok((path, edits)) = resolve_target(db, &target, false, false).await {
+        return play_single_clip(path, edits, loop_mode, registry);
+    }
+
+    match build_collection_queue(db, &target).await {
+        Ok((title, items)) => {
+            let queue = PlaybackQueue::new(items, Arc::clone(&registry))?;
+            if loop_mode { queue.engine().toggle_loop(); }
+            run_player(queue, Some(title), String::new())
+        }
+        Err(_) => Err(anyhow!(
+            "'{target}' is not a known file, clip, or collection slug, or an existing file path"
+        )),
+    }
+}
+
+async fn build_collection_queue(
+    db: &DatabaseConnection,
+    slug: &str,
+) -> Result<(String, Vec<QueueItem>)> {
+    let (col, clips) = collection_service::get_collection_with_clips(db, slug).await?;
+    if clips.is_empty() {
+        return Err(anyhow!("collection '{slug}' has no clips"));
+    }
+    let mut items = Vec::with_capacity(clips.len());
+    for clip in &clips {
+        let file = file_service::get_file_by_id(db, &clip.file_id)
+            .await
+            .map_err(|_| anyhow!("file not found for clip '{}'", clip.slug))?;
+        let edits = deserialize_processor_edits(&clip.processors);
+        items.push(QueueItem { title: clip.title.clone(), path: file.path.clone(), edits });
+    }
+    Ok((col.title, items))
+}
+
+fn play_single_clip(
+    path: PathBuf,
+    edits: Vec<ProcessorEdit>,
+    loop_mode: bool,
+    registry: Arc<EditRegistry>,
+) -> Result<()> {
+    let processor_display = format_processor_display(&structural_edits_from(&edits));
     let item = QueueItem {
-        title: path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string(),
+        title: path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string(),
         path:  path.to_string_lossy().to_string(),
         edits,
     };

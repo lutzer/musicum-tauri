@@ -120,7 +120,8 @@ pub(super) fn decode_loop(
             }
             state.position.store(0, Ordering::Relaxed);
             if !state.looping.load(Ordering::Relaxed) {
-                state.paused.store(true, Ordering::Relaxed);
+                state.finished.store(true, Ordering::Relaxed);
+                return;
             }
             chain = match build_fresh_chain(&path, &structural_edits, &registry) {
                 Ok(c) => c,
@@ -146,7 +147,8 @@ pub(super) fn decode_loop(
             }
             state.position.store(0, Ordering::Relaxed);
             if !state.looping.load(Ordering::Relaxed) {
-                state.paused.store(true, Ordering::Relaxed);
+                state.finished.store(true, Ordering::Relaxed);
+                return;
             }
             chain = match build_fresh_chain(&path, &structural_edits, &registry) {
                 Ok(c) => c,
