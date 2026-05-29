@@ -1,5 +1,6 @@
 mod processor_chain;
 pub mod player;
+pub mod queue;
 pub mod registry;
 pub mod source;
 
@@ -7,6 +8,7 @@ use crate::edit::{EditKind, ProcessorEdit};
 use structural_processor_sdk::chain::StructuralEdit;
 
 pub use player::PlaybackEngine;
+pub use queue::{PlaybackQueue, QueueItem};
 pub use registry::{EditEntry, EditRegistry, EditType, ParamInfo};
 pub use source::FileAudioSource;
 

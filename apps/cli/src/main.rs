@@ -36,8 +36,11 @@ enum Commands {
     Processors(commands::processors::ProcessorsArgs),
     /// Play a file or clip (slug or file path)
     Play {
-        /// Slug or file path to play
-        target: String,
+        /// Slug or file path to play (omit when using --collection)
+        target: Option<String>,
+        /// Play all clips in a collection by slug
+        #[arg(long, conflicts_with_all = ["file", "clip"])]
+        collection: Option<String>,
         /// Resolve target as a file slug (skips clip lookup)
         #[arg(long, conflicts_with = "clip")]
         file: bool,
@@ -82,8 +85,8 @@ async fn main() -> Result<()> {
         Commands::Collections(args) => commands::collections::run(&db, args).await?,
         Commands::Presets(args)     => commands::presets::run(&db, &paths.catalog_dir, args).await?,
         Commands::Processors(args)  => commands::processors::run(args),
-        Commands::Play { target, file, clip, loop_mode } => {
-            commands::play::run(&db, target, file, clip, loop_mode).await?
+        Commands::Play { target, collection, file, clip, loop_mode } => {
+            commands::play::run(&db, target, collection, file, clip, loop_mode).await?
         }
         Commands::Export(args) => commands::export::run(&db, args).await?,
         Commands::Config => unreachable!(),
