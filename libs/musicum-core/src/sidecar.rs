@@ -33,6 +33,8 @@ pub(crate) enum ProcessorEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileSidecar {
+    #[serde(default)]
+    pub id: String,
     pub version: u32,
     pub metadata: FileMetadataSidecar,
     #[serde(default)]
@@ -44,7 +46,8 @@ pub struct FileSidecar {
 impl FileSidecar {
     pub fn default_for_file() -> Self {
         FileSidecar {
-            version: 1,
+            id: String::new(),
+            version: 2,
             metadata: FileMetadataSidecar::default(),
             attachments: vec![],
             clips: vec![],
@@ -146,6 +149,7 @@ mod tests {
         };
 
         let sc = FileSidecar {
+            id: "test-file-id".to_string(),
             version: 1,
             metadata: FileMetadataSidecar::default(),
             attachments: vec![],

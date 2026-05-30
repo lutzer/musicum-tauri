@@ -100,6 +100,7 @@ pub async fn run(db: &DatabaseConnection, files_dir: &Path, args: FilesArgs) -> 
                 let mut items: Vec<DetailItem> = vec![
                     Section("file"),
                     Field("slug", file.slug.clone()),
+                    Field("id", file.id.clone()),
                     Field("name", file.name.clone()),
                     Field("path", file.path.clone()),
                     Field("duration", format!("{:.3}s", file.duration)),

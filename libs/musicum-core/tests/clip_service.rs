@@ -58,6 +58,7 @@ async fn create_clip_slug_collision() {
 
     // Pre-write sidecar with a clip whose slug would collide
     let sc = sidecar::FileSidecar {
+        id: String::new(),
         version: 1,
         metadata: Default::default(),
         attachments: vec![],

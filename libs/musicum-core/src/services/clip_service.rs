@@ -211,6 +211,7 @@ mod tests {
         .unwrap();
 
         let sc = FileSidecar {
+            id: "test-clip-file-id".to_string(),
             version: 1,
             metadata: FileMetadataSidecar::default(),
             attachments: vec![],

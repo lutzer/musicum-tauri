@@ -44,7 +44,7 @@ async fn sync_creates_sidecar_next_to_audio() {
     assert!(sidecar_path.exists(), "sidecar should be created next to audio file");
 
     let sc = sidecar::read_file_sidecar(&wav).unwrap();
-    assert_eq!(sc.version, 1);
+    assert_eq!(sc.version, 2);
     assert!(sc.clips.is_empty());
 }
 
@@ -57,6 +57,7 @@ async fn sync_reads_existing_sidecar_with_clips() {
 
     let sidecar_path = sidecar::sidecar_path_for_audio(&wav);
     let sc = sidecar::FileSidecar {
+        id: String::new(),
         version: 1,
         metadata: sidecar::FileMetadataSidecar {
             bpm: Some(120.0),

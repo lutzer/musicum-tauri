@@ -10,6 +10,9 @@
 * [ ] add zero crossing cuts to edits
 * [ ] load plugins and structural edits dynamically not at compile time
 * [ ] integrate vst plugins, and maybe replace own plugin system
+* [ ] add option to rebuild the whole database on sync
+* [ ] add option to repair filebase: if sidecar doesnt has a soundfile try to find it by its hash and rename the sidecar. if no soundfile with that hash exist ask if sidecar should be removed. also remove the db entry respectivly. have option -f to remove without confirmation
+* [ ] create file slug from path + filename 
 
 ## cli
 * [x] add collection feature
@@ -21,6 +24,8 @@
 * [ ] list available output devices and add option for player to play on a specific one
 * [ ] add option to start player with a certain preset without writing it to the database
 * [x] document code completion setup
+* [ ] bug: code completion doesnt seem to work reliably
+* [ ] musicum clip create <file_slug> should create a clip with the same slug
 
 
 ## gui
