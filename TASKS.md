@@ -10,11 +10,10 @@
 * [ ] add zero crossing cuts to edits
 * [ ] load plugins and structural edits dynamically not at compile time
 * [ ] integrate vst plugins, and maybe replace own plugin system
-* [*] add option to repair filebase: if sidecar doesnt has a soundfile try to find it by its hash and rename the sidecar. if no soundfile with that hash exist ask if sidecar should be removed. also remove the db entry respectivly. have option -f to remove without confirmation
+* [x] add option to repair filebase: if sidecar doesnt has a soundfile try to find it by its hash and rename the sidecar. if no soundfile with that hash exist ask if sidecar should be removed. also remove the db entry respectivly. have option -f to remove without confirmation
 * [ ] create file slug from path + filename 
 * [ ] add option to rebuild sidecars from database: "sync --rebuild-sidecars", it should remove all sidecars in the library folder and recreate them using the database entries
-
-* [ ] refactor config singleton
+* [x] refactor config singleton
 
 ## cli
 * [x] add collection feature

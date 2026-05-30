@@ -37,6 +37,17 @@ pub struct SyncReport {
     pub orphaned_sidecars: Vec<OrphanedSidecarInfo>,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct RemoveReport {
+    pub removed: Vec<std::path::PathBuf>,
+}
+
+#[derive(Debug, Default)]
+pub struct RebuildReport {
+    pub rebuilt: Vec<String>,
+    pub skipped: Vec<String>,
+}
+
 pub async fn sync_library(
     db: &DatabaseConnection,
     files_dir: &std::path::Path,
@@ -68,7 +79,7 @@ pub async fn sync_library(
 
         if path.is_dir() {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with('.') || name == "catalog" { continue; }
+            if name.starts_with('.') { continue; }
         }
 
         if !path.is_file() { continue; }
@@ -299,6 +310,86 @@ pub async fn remove_orphaned_sidecar(
     Ok(())
 }
 
+pub(crate) fn remove_sidecars(files_dir: &std::path::Path) -> Result<RemoveReport, ServiceError> {
+    let mut report = RemoveReport::default();
+    for entry in WalkDir::new(files_dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with('.') { continue; }
+        }
+        if !path.is_file() { continue; }
+        let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if fname.ends_with(".musicum.json") {
+            std::fs::remove_file(path)?;
+            report.removed.push(path.to_path_buf());
+        }
+    }
+    Ok(report)
+}
+
+pub async fn rebuild_sidecars(
+    db: &DatabaseConnection,
+    files_dir: &std::path::Path,
+) -> Result<RebuildReport, ServiceError> {
+    use crate::db::entities::{clip, file_metadata};
+    use sea_orm::QueryFilter;
+    use sea_orm::ColumnTrait;
+
+    // Delete all existing sidecars first (filesystem walk catches orphans too).
+    remove_sidecars(files_dir)?;
+
+    let mut report = RebuildReport::default();
+    let all_files = file::Entity::find().all(db).await?;
+
+    for f in all_files {
+        let audio_path = std::path::Path::new(&f.path);
+        if !audio_path.exists() {
+            report.skipped.push(f.name.clone());
+            continue;
+        }
+
+        // Load metadata (row may be absent).
+        let meta = file_metadata::Entity::find_by_id(&f.id).one(db).await?;
+        let metadata = meta.map(|m| sidecar::FileMetadataSidecar {
+            bpm:    m.bpm,
+            key:    m.key,
+            rating: m.rating,
+            color:  m.color,
+            notes:  m.notes,
+            tags:   m.tags,
+        }).unwrap_or_default();
+
+        // Load clips.
+        let clip_rows = clip::Entity::find()
+            .filter(clip::Column::FileId.eq(&f.id))
+            .all(db)
+            .await?;
+        let clips = clip_rows.into_iter().map(|c| sidecar::ClipSidecar {
+            slug:       c.slug,
+            title:      c.title,
+            notes:      c.notes,
+            processors: crate::edit::deserialize_processor_edits(&c.processors),
+        }).collect();
+
+        let sc = sidecar::FileSidecar {
+            id:          f.id.clone(),
+            version:     2,
+            metadata,
+            attachments: vec![],
+            clips,
+        };
+        sidecar::write_file_sidecar(audio_path, &sc)?;
+        report.rebuilt.push(f.name.clone());
+    }
+
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,5 +566,74 @@ mod tests {
             .all(&db).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "brand-new");
+    }
+
+    // ── remove_sidecars ──────────────────────────────────────────────────────
+
+    #[test]
+    fn remove_sidecars_deletes_all_sidecar_files() {
+        let dir = tempdir().unwrap();
+        let sc1 = dir.path().join("kick.wav.musicum.json");
+        std::fs::write(&sc1, "{}").unwrap();
+        let sc2 = dir.path().join(".snare.wav.musicum.json");
+        std::fs::write(&sc2, "{}").unwrap();
+        let audio = dir.path().join("kick.wav");
+        write_wav(&audio);
+
+        let report = remove_sidecars(dir.path()).unwrap();
+
+        assert_eq!(report.removed.len(), 2);
+        assert!(!sc1.exists());
+        assert!(!sc2.exists());
+        assert!(audio.exists(), "audio file must survive");
+    }
+
+    #[test]
+    fn remove_sidecars_catches_orphan_without_audio() {
+        let dir = tempdir().unwrap();
+        let orphan = dir.path().join("gone.wav.musicum.json");
+        std::fs::write(&orphan, "{}").unwrap();
+
+        let report = remove_sidecars(dir.path()).unwrap();
+
+        assert_eq!(report.removed.len(), 1);
+        assert!(!orphan.exists());
+    }
+
+    // ── rebuild_sidecars ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn rebuild_sidecars_writes_sidecar_for_existing_audio() {
+        let db = test_db().await;
+        let dir = tempdir().unwrap();
+        let audio = dir.path().join("kick.wav");
+        write_wav(&audio);
+        let uuid = "cccccccc-0000-0000-0000-000000000001";
+        insert_file_row(&db, uuid, audio.to_str().unwrap(), "hash1").await;
+
+        let report = rebuild_sidecars(&db, dir.path()).await.unwrap();
+
+        assert_eq!(report.rebuilt, vec!["kick"]);
+        assert!(report.skipped.is_empty());
+        let sc_path = crate::sidecar::sidecar_path_for_audio(&audio);
+        assert!(sc_path.exists(), "sidecar should be written");
+        let sc: crate::sidecar::FileSidecar =
+            serde_json::from_str(&std::fs::read_to_string(&sc_path).unwrap()).unwrap();
+        assert_eq!(sc.id, uuid);
+        assert_eq!(sc.version, 2);
+    }
+
+    #[tokio::test]
+    async fn rebuild_sidecars_skips_missing_audio() {
+        let db = test_db().await;
+        let dir = tempdir().unwrap();
+        let audio = dir.path().join("gone.wav"); // file is NOT created
+        let uuid = "dddddddd-0000-0000-0000-000000000002";
+        insert_file_row(&db, uuid, audio.to_str().unwrap(), "hash2").await;
+
+        let report = rebuild_sidecars(&db, dir.path()).await.unwrap();
+
+        assert!(report.rebuilt.is_empty());
+        assert_eq!(report.skipped, vec!["gone"]);
     }
 }

@@ -27,6 +27,9 @@ enum Commands {
         /// Auto-remove unresolvable orphaned sidecars without prompting
         #[arg(short = 'f', long = "force")]
         force: bool,
+        /// Delete all sidecars (including orphans) and rebuild from DB, then sync
+        #[arg(long = "rebuild-sidecars")]
+        rebuild_sidecars: bool,
     },
     /// File operations
     Files(commands::files::FilesArgs),
@@ -96,7 +99,8 @@ async fn main() -> Result<()> {
     let db = musicum_core::db::connect(&Config::get().library.catalog_dir).await?;
 
     match cli.command {
-        Commands::Sync { force }    => commands::sync::run(&db, force).await?,
+        Commands::Sync { force, rebuild_sidecars } =>
+            commands::sync::run(&db, force, rebuild_sidecars).await?,
         Commands::Files(args)       => commands::files::run(&db, args).await?,
         Commands::Clips(args)       => commands::clips::run(&db, args).await?,
         Commands::Collections(args) => commands::collections::run(&db, args).await?,

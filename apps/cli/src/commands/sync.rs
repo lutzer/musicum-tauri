@@ -5,8 +5,29 @@ use indicatif::{ProgressBar, ProgressStyle};
 use musicum_core::services::sync_service;
 use sea_orm::DatabaseConnection;
 
-pub async fn run(db: &DatabaseConnection, force: bool) -> Result<()> {
-    println!("Syncing library: {}", musicum_core::config::Config::get().library.files_dir.display());
+pub async fn run(
+    db: &DatabaseConnection,
+    force: bool,
+    rebuild_sidecars: bool,
+) -> Result<()> {
+    let files_dir = musicum_core::config::Config::get().library.files_dir.clone();
+
+    // ── --rebuild-sidecars pre-pass ───────────────────────────────────────
+    if rebuild_sidecars {
+        println!("Rebuilding sidecars from DB…");
+        let report = sync_service::rebuild_sidecars(db, &files_dir).await?;
+        for name in &report.rebuilt { println!("  [rebuilt]  {name}"); }
+        for name in &report.skipped { println!("  [skipped]  {name} (audio file not found)"); }
+        match (report.rebuilt.len(), report.skipped.len()) {
+            (0, _) => println!("Nothing rebuilt"),
+            (r, s) if s > 0 => println!("Rebuilt {r} sidecars ({s} skipped)"),
+            (r, _) => println!("Rebuilt {r} sidecars"),
+        }
+        println!();
+    }
+
+    // ── Normal sync ───────────────────────────────────────────────────────
+    println!("Syncing library: {}", files_dir.display());
 
     let pb = ProgressBar::new_spinner();
     pb.set_style(
@@ -15,7 +36,7 @@ pub async fn run(db: &DatabaseConnection, force: bool) -> Result<()> {
     );
 
     let pb_tick = pb.clone();
-    let report = sync_service::sync_library(db, &musicum_core::config::Config::get().library.files_dir, move || pb_tick.inc(1)).await?;
+    let report = sync_service::sync_library(db, &files_dir, move || pb_tick.inc(1)).await?;
 
     pb.finish_and_clear();
 
