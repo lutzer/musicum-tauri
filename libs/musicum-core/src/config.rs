@@ -10,6 +10,7 @@ pub struct AppSettings {
 #[derive(Debug, Deserialize)]
 pub struct LibraryConfig {
     pub dir: String,
+    pub hidden_sidecars: bool,
     pub files_dir: Option<String>,
     pub catalog_dir: Option<String>,
     pub generated_dir: Option<String>,
@@ -46,6 +47,7 @@ fn write_default_config(path: &Path) -> Result<()> {
 
 [library]
 dir = "{default_dir}"
+hidden_sidecars = true
 
 # Override individual subdirectories (uncomment to customize)
 # files_dir = "{default_dir}/files"

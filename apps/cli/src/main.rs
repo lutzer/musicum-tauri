@@ -23,7 +23,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Walk the library directory and sync DB + sidecars
-    Sync,
+    Sync {
+        /// Auto-remove unresolvable orphaned sidecars without prompting
+        #[arg(short = 'f', long = "force")]
+        force: bool,
+    },
     /// File operations
     Files(commands::files::FilesArgs),
     /// Clip operations
@@ -96,7 +100,7 @@ async fn main() -> Result<()> {
     let db = musicum_core::db::connect(&paths.catalog_dir).await?;
 
     match cli.command {
-        Commands::Sync              => commands::sync::run(&db, &paths).await?,
+        Commands::Sync { force }    => commands::sync::run(&db, &paths, force).await?,
         Commands::Files(args)       => commands::files::run(&db, &paths.files_dir, args).await?,
         Commands::Clips(args)       => commands::clips::run(&db, args).await?,
         Commands::Collections(args) => commands::collections::run(&db, args).await?,

@@ -116,6 +116,7 @@ pub fn write_file_sidecar(audio_path: &Path, sidecar: &FileSidecar) -> Result<()
 }
 
 pub fn sidecar_path_for_audio(audio_path: &Path) -> std::path::PathBuf {
+    let hidden_sidecars = true;
     let stem = audio_path
         .file_name()
         .unwrap_or_default()
@@ -123,7 +124,7 @@ pub fn sidecar_path_for_audio(audio_path: &Path) -> std::path::PathBuf {
     audio_path
         .parent()
         .unwrap_or(Path::new("."))
-        .join(format!("{stem}.musicum.json"))
+        .join(if (hidden_sidecars) { format!(".{stem}.musicum.json") } else { format!("{stem}.musicum.json") })
 }
 
 #[cfg(test)]

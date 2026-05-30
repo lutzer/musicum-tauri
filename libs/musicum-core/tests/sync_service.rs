@@ -127,11 +127,36 @@ async fn sync_detects_removed_files() {
     sync_service::sync_library(&db, &paths, || ()).await.unwrap();
     assert_eq!(file::Entity::find().count(&db).await.unwrap(), 1);
 
+    // Remove both audio and sidecar to simulate a full deletion (no orphan).
     std::fs::remove_file(&wav).unwrap();
+    let sc = sidecar::sidecar_path_for_audio(&wav);
+    if sc.exists() { std::fs::remove_file(&sc).unwrap(); }
 
     let s2 = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
     assert_eq!(s2.files_removed.len(), 1);
     assert_eq!(file::Entity::find().count(&db).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn sync_orphans_sidecar_when_only_audio_removed() {
+    let dir = tempdir().unwrap();
+    let paths = common::make_paths(dir.path());
+    let wav = paths.files_dir.join("temp.wav");
+    common::write_sine_wav(&wav, 0.3);
+
+    let db = setup(&paths).await;
+    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    assert_eq!(file::Entity::find().count(&db).await.unwrap(), 1);
+
+    // Remove only the audio file; sidecar stays behind.
+    std::fs::remove_file(&wav).unwrap();
+    assert!(sidecar::sidecar_path_for_audio(&wav).exists());
+
+    let s2 = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    assert_eq!(s2.files_removed.len(), 0, "should not auto-remove when sidecar remains");
+    assert_eq!(s2.orphaned_sidecars.len(), 1, "should report the orphaned sidecar");
+    // DB record preserved — user must confirm removal.
+    assert_eq!(file::Entity::find().count(&db).await.unwrap(), 1);
 }
 
 #[tokio::test]
