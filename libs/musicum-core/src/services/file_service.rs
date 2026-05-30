@@ -152,6 +152,8 @@ mod tests {
             channels:    Set(2),
             mime_type:   Set("audio/wav".to_string()),
             hash:        Set("abc".to_string()),
+            mtime:       Set(String::new()),
+            size_bytes:  Set(0),
             created_at:  Set(now.clone()),
             updated_at:  Set(now),
         }

@@ -12,25 +12,6 @@ use crate::ServiceError;
 
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "ogg", "aiff", "aif"];
 
-pub fn count_audio_files(files_dir: &Path) -> Result<usize, ServiceError> {
-    let count = WalkDir::new(files_dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            let p = e.path();
-            if p.is_dir() {
-                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if name.starts_with('.') || name == "catalog" { return false; }
-            }
-            if !p.is_file() { return false; }
-            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-            AUDIO_EXTENSIONS.contains(&ext.as_str())
-        })
-        .count();
-    Ok(count)
-}
-
 #[derive(Debug, Default)]
 pub struct SyncReport {
     pub files_added:      Vec<String>,
@@ -81,11 +62,26 @@ pub async fn sync_library(
         let path_str = path.to_string_lossy().to_string();
         existing_paths.remove(&path_str);
 
+        let (mtime, size_bytes) = file_mtime(path)?;
+
+        // Fast-skip: if mtime and size match what's in the DB, nothing has changed.
+        let existing = file::Entity::find()
+            .filter(file::Column::Path.eq(&path_str))
+            .one(db)
+            .await?;
+
+        if let Some(ref ex) = existing {
+            if ex.mtime == mtime && ex.size_bytes == size_bytes {
+                on_progress();
+                continue;
+            }
+        }
+
         let hash = file_hash(path)?;
         let sc = sidecar::read_file_sidecar(path)?;
         let audio_info = probe_audio(path)?;
 
-        upsert_file(db, path, &path_str, &hash, &audio_info, &sc, &mut report).await?;
+        upsert_file(db, path, &path_str, &hash, &mtime, size_bytes, &audio_info, &sc, existing, &mut report).await?;
         on_progress();
     }
 
@@ -182,20 +178,40 @@ pub fn probe_audio(path: &Path) -> Result<AudioInfo, ServiceError> {
 }
 
 fn file_hash(path: &Path) -> Result<String, ServiceError> {
-    let bytes = std::fs::read(path)?;
-    let hash = Sha256::digest(&bytes);
-    Ok(hex::encode(hash))
+    use std::io::{BufReader, Read};
+    let file = std::fs::File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 { break; }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn file_mtime(path: &Path) -> Result<(String, i64), ServiceError> {
+    let meta = std::fs::metadata(path)?;
+    let modified = meta.modified()?;
+    let size = meta.len() as i64;
+    let dt: chrono::DateTime<chrono::Utc> = modified.into();
+    Ok((dt.to_rfc3339(), size))
 }
 
 // ── Upsert helpers ────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn upsert_file(
     db: &DatabaseConnection,
     path: &Path,
     path_str: &str,
     hash: &str,
+    mtime: &str,
+    size_bytes: i64,
     audio: &AudioInfo,
     sc: &FileSidecar,
+    existing: Option<file::Model>,
     report: &mut SyncReport,
 ) -> Result<(), ServiceError> {
     let name = path
@@ -206,14 +222,29 @@ async fn upsert_file(
     let slug = slugify(&name);
     let now = chrono::Utc::now().to_rfc3339();
 
-    // Find existing file by path
-    let existing = file::Entity::find()
-        .filter(file::Column::Path.eq(path_str))
-        .one(db)
-        .await?;
-
     let file_id = if let Some(existing_model) = existing {
         if existing_model.hash == hash {
+            // Contents unchanged (e.g. file was `touch`ed). Update mtime/size so
+            // future syncs fast-skip correctly.
+            if existing_model.mtime != mtime || existing_model.size_bytes != size_bytes {
+                file::ActiveModel {
+                    id:          Set(existing_model.id.clone()),
+                    slug:        Set(existing_model.slug.clone()),
+                    name:        Set(existing_model.name.clone()),
+                    path:        Set(existing_model.path.clone()),
+                    duration:    Set(existing_model.duration),
+                    sample_rate: Set(existing_model.sample_rate),
+                    channels:    Set(existing_model.channels),
+                    mime_type:   Set(existing_model.mime_type.clone()),
+                    hash:        Set(existing_model.hash.clone()),
+                    mtime:       Set(mtime.to_string()),
+                    size_bytes:  Set(size_bytes),
+                    created_at:  Set(existing_model.created_at.clone()),
+                    updated_at:  Set(existing_model.updated_at.clone()),
+                }
+                .update(db)
+                .await?;
+            }
             let meta_changed = upsert_file_metadata(db, &existing_model.id, &sc.metadata).await?;
             let clips_changed = upsert_clips(db, &existing_model.id, &sc.clips).await?;
             if meta_changed || clips_changed {
@@ -223,17 +254,19 @@ async fn upsert_file(
         }
         // File changed (hash differs) — update
         file::ActiveModel {
-            id: Set(existing_model.id.clone()),
-            slug: Set(slug),
-            name: Set(name.clone()),
-            path: Set(path_str.to_string()),
-            duration: Set(audio.duration),
+            id:          Set(existing_model.id.clone()),
+            slug:        Set(slug),
+            name:        Set(name.clone()),
+            path:        Set(path_str.to_string()),
+            duration:    Set(audio.duration),
             sample_rate: Set(audio.sample_rate as i32),
-            channels: Set(audio.channels as i32),
-            mime_type: Set(audio.mime_type.clone()),
-            hash: Set(hash.to_string()),
-            created_at: Set(existing_model.created_at.clone()),
-            updated_at: Set(now),
+            channels:    Set(audio.channels as i32),
+            mime_type:   Set(audio.mime_type.clone()),
+            hash:        Set(hash.to_string()),
+            mtime:       Set(mtime.to_string()),
+            size_bytes:  Set(size_bytes),
+            created_at:  Set(existing_model.created_at.clone()),
+            updated_at:  Set(now),
         }
         .update(db)
         .await?;
@@ -246,17 +279,19 @@ async fn upsert_file(
         let id = Uuid::new_v4().to_string();
 
         file::ActiveModel {
-            id: Set(id.clone()),
-            slug: Set(slug),
-            name: Set(name.clone()),
-            path: Set(path_str.to_string()),
-            duration: Set(audio.duration),
+            id:          Set(id.clone()),
+            slug:        Set(slug),
+            name:        Set(name.clone()),
+            path:        Set(path_str.to_string()),
+            duration:    Set(audio.duration),
             sample_rate: Set(audio.sample_rate as i32),
-            channels: Set(audio.channels as i32),
-            mime_type: Set(audio.mime_type.clone()),
-            hash: Set(hash.to_string()),
-            created_at: Set(now.clone()),
-            updated_at: Set(now),
+            channels:    Set(audio.channels as i32),
+            mime_type:   Set(audio.mime_type.clone()),
+            hash:        Set(hash.to_string()),
+            mtime:       Set(mtime.to_string()),
+            size_bytes:  Set(size_bytes),
+            created_at:  Set(now.clone()),
+            updated_at:  Set(now),
         }
         .insert(db)
         .await?;
@@ -397,6 +432,3 @@ pub(crate) async fn delete_file_cascade(db: &DatabaseConnection, file_id: &str) 
 
     Ok(())
 }
-
-
-

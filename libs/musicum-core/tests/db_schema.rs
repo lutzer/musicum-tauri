@@ -56,6 +56,8 @@ async fn schema_reset_on_version_bump() {
         channels: Set(2),
         mime_type: Set("audio/wav".into()),
         hash: Set("abc123".into()),
+        mtime: Set(String::new()),
+        size_bytes: Set(0),
         created_at: Set(now()),
         updated_at: Set(now()),
     }
@@ -96,6 +98,8 @@ async fn insert_and_query_file_with_metadata() {
         channels: Set(1),
         mime_type: Set("audio/wav".into()),
         hash: Set("deadbeef".into()),
+        mtime: Set(String::new()),
+        size_bytes: Set(0),
         created_at: Set(now()),
         updated_at: Set(now()),
     }
@@ -149,6 +153,8 @@ async fn insert_clip_and_query_by_file() {
         channels: Set(2),
         mime_type: Set("audio/wav".into()),
         hash: Set("cafebabe".into()),
+        mtime: Set(String::new()),
+        size_bytes: Set(0),
         created_at: Set(now()),
         updated_at: Set(now()),
     }
@@ -197,6 +203,8 @@ async fn collection_clip_unique_constraint() {
         channels: Set(1),
         mime_type: Set("audio/wav".into()),
         hash: Set("11".into()),
+        mtime: Set(String::new()),
+        size_bytes: Set(0),
         created_at: Set(now()),
         updated_at: Set(now()),
     }

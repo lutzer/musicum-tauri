@@ -12,7 +12,7 @@
 * [ ] integrate vst plugins, and maybe replace own plugin system
 
 ## cli
-* [ ] add collection feature
+* [x] add collection feature
 * [x] display folder name and tags in list
 * [ ] export/import function for collections and presets
 * [x] export audio files in a certain format
@@ -20,7 +20,7 @@
 * [x] remove plugin dependencies from the cli, should only be in the core library. there should be a registry that exposes the available plugins and processors and that lets you update edits and there should be a an engine function to update processors and plugins while its playing. i want to reuse this interface also with the tauri gui at a later point, so please design that interface to be reusable
 * [ ] list available output devices and add option for player to play on a specific one
 * [ ] add option to start player with a certain preset without writing it to the database
-* [ ] document code completion setup
+* [x] document code completion setup
 
 
 ## gui

@@ -7,26 +7,11 @@ use sea_orm::DatabaseConnection;
 pub async fn run(db: &DatabaseConnection, paths: &LibraryPaths) -> Result<()> {
     println!("Syncing library: {}", paths.library_dir.display());
 
-    let total = sync_service::count_audio_files(&paths.files_dir).unwrap_or(0);
-
-    let pb = if total > 0 {
-        let bar = ProgressBar::new(total as u64);
-        bar.set_style(
-            ProgressStyle::with_template(
-                "  {bar:40.cyan/blue} {pos}/{len}  {elapsed_precise}"
-            )
-            .unwrap()
-            .progress_chars("█▉▊▋▌▍▎▏  "),
-        );
-        bar
-    } else {
-        let bar = ProgressBar::new_spinner();
-        bar.set_style(
-            ProgressStyle::with_template("  {spinner:.cyan} scanning…  {elapsed_precise}")
-                .unwrap(),
-        );
-        bar
-    };
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("  {spinner:.cyan} {pos} files scanned  {elapsed_precise}")
+            .unwrap(),
+    );
 
     let pb_tick = pb.clone();
     let report = sync_service::sync_library(db, paths, move || pb_tick.inc(1)).await?;

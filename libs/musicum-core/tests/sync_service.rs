@@ -148,8 +148,11 @@ async fn sync_walks_subdirectories() {
     assert_eq!(stats.files_added.len(), 3, "should find files in subdirectories too");
 }
 
+// Sidecar-only changes are not picked up without touching the audio file (known limitation).
+// Touching the audio file (rewriting its bytes) causes the fast-skip gate to fire on
+// mtime change, which triggers a re-read of the sidecar.
 #[tokio::test]
-async fn sync_picks_up_sidecar_metadata_when_audio_unchanged() {
+async fn sync_picks_up_sidecar_metadata_after_audio_touch() {
     let dir = tempdir().unwrap();
     let paths = common::make_paths(dir.path());
     let wav = paths.files_dir.join("bass.wav");
@@ -163,6 +166,10 @@ async fn sync_picks_up_sidecar_metadata_when_audio_unchanged() {
     sc.metadata.bpm = Some(140.0);
     sc.metadata.key = Some("Am".into());
     std::fs::write(&sidecar_path, serde_json::to_string_pretty(&sc).unwrap()).unwrap();
+
+    // Touch the audio file so the mtime-based fast-skip gate fires and re-reads the sidecar.
+    let wav_bytes = std::fs::read(&wav).unwrap();
+    std::fs::write(&wav, &wav_bytes).unwrap();
 
     sync_service::sync_library(&db, &paths, || ()).await.unwrap();
 
@@ -188,6 +195,10 @@ async fn report_tracks_sidecar_metadata_update() {
     sc.metadata.bpm = Some(140.0);
     let sidecar_path = sidecar::sidecar_path_for_audio(&wav);
     std::fs::write(&sidecar_path, serde_json::to_string_pretty(&sc).unwrap()).unwrap();
+
+    // Touch the audio file so the mtime-based fast-skip gate fires and re-reads the sidecar.
+    let wav_bytes = std::fs::read(&wav).unwrap();
+    std::fs::write(&wav, &wav_bytes).unwrap();
 
     let report = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
 

@@ -15,6 +15,8 @@ pub struct Model {
     pub channels: i32,
     pub mime_type: String,
     pub hash: String,
+    pub mtime: String,
+    pub size_bytes: i64,
     pub created_at: String,
     pub updated_at: String,
 }
