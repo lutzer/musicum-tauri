@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use musicum_core::services::{clip_service, file_service};
@@ -8,8 +6,8 @@ use sea_orm::DatabaseConnection;
 use crate::output::{DetailItem::{self, Field, Section}, print_detail, print_json, print_result, print_table};
 
 /// Returns the subfolder of `file_path` relative to `files_dir`, or "-" if at root.
-fn subfolder_of(file_path: &str, files_dir: &Path) -> String {
-    let path = Path::new(file_path);
+fn subfolder_of(file_path: &str, files_dir: &std::path::Path) -> String {
+    let path = std::path::Path::new(file_path);
     if let Some(parent) = path.parent() {
         if let Ok(rel) = parent.strip_prefix(files_dir) {
             let s = rel.to_string_lossy();
@@ -59,7 +57,7 @@ pub enum FilesCommand {
     },
 }
 
-pub async fn run(db: &DatabaseConnection, files_dir: &Path, args: FilesArgs) -> Result<()> {
+pub async fn run(db: &DatabaseConnection, args: FilesArgs) -> Result<()> {
     match args.command {
         FilesCommand::List { json } => {
             let files = file_service::list_files(db).await?;
@@ -75,7 +73,7 @@ pub async fn run(db: &DatabaseConnection, files_dir: &Path, args: FilesArgs) -> 
                         .iter()
                         .map(|f| vec![
                             f.slug.clone(),
-                            subfolder_of(&f.path, files_dir),
+                            subfolder_of(&f.path, &musicum_core::config::Config::get().library.files_dir),
                             f.name.clone(),
                             format!("[{:.1}s  {}Hz  {}ch]", f.duration, f.sample_rate, f.channels),
                         ])

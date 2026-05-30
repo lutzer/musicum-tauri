@@ -3,6 +3,7 @@ use std::path::Path;
 
 use crate::edit::{deserialize_processor_edits, ProcessorEdit};
 use crate::ServiceError;
+use crate::config;
 
 // ── Legacy processor entry (kept for potential future migration paths) ───────
 // These types are no longer part of the public API; use `ProcessorEdit` instead.
@@ -116,7 +117,7 @@ pub fn write_file_sidecar(audio_path: &Path, sidecar: &FileSidecar) -> Result<()
 }
 
 pub fn sidecar_path_for_audio(audio_path: &Path) -> std::path::PathBuf {
-    let hidden_sidecars = true;
+    let hidden_sidecars = config::Config::get().general.hidden_sidecars;
     let stem = audio_path
         .file_name()
         .unwrap_or_default()
@@ -124,7 +125,7 @@ pub fn sidecar_path_for_audio(audio_path: &Path) -> std::path::PathBuf {
     audio_path
         .parent()
         .unwrap_or(Path::new("."))
-        .join(if (hidden_sidecars) { format!(".{stem}.musicum.json") } else { format!("{stem}.musicum.json") })
+        .join(if hidden_sidecars { format!(".{stem}.musicum.json") } else { format!("{stem}.musicum.json") })
 }
 
 #[cfg(test)]
@@ -185,7 +186,7 @@ mod tests {
                 }]
             }]
         }"#;
-        let sidecar_path = audio.with_file_name("test.wav.musicum.json");
+        let sidecar_path = sidecar_path_for_audio(&audio);
         std::fs::write(&sidecar_path, old_json).unwrap();
 
         let sc = read_file_sidecar(&audio).unwrap();

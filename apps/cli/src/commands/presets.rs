@@ -59,7 +59,7 @@ pub enum PresetsCommand {
     },
 }
 
-pub async fn run(db: &DatabaseConnection, _catalog_dir: &std::path::Path, args: PresetsArgs) -> Result<()> {
+pub async fn run(db: &DatabaseConnection, args: PresetsArgs) -> Result<()> {
     match args.command {
         PresetsCommand::List { json } => {
             let presets = preset_service::list_presets(db).await?;

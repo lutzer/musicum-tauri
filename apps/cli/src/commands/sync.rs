@@ -2,12 +2,11 @@ use std::io::Write;
 
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
-use musicum_core::config::LibraryPaths;
 use musicum_core::services::sync_service;
 use sea_orm::DatabaseConnection;
 
-pub async fn run(db: &DatabaseConnection, paths: &LibraryPaths, force: bool) -> Result<()> {
-    println!("Syncing library: {}", paths.library_dir.display());
+pub async fn run(db: &DatabaseConnection, force: bool) -> Result<()> {
+    println!("Syncing library: {}", musicum_core::config::Config::get().library.files_dir.display());
 
     let pb = ProgressBar::new_spinner();
     pb.set_style(
@@ -16,7 +15,7 @@ pub async fn run(db: &DatabaseConnection, paths: &LibraryPaths, force: bool) -> 
     );
 
     let pb_tick = pb.clone();
-    let report = sync_service::sync_library(db, paths, move || pb_tick.inc(1)).await?;
+    let report = sync_service::sync_library(db, &musicum_core::config::Config::get().library.files_dir, move || pb_tick.inc(1)).await?;
 
     pb.finish_and_clear();
 

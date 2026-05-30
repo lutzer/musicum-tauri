@@ -3,7 +3,7 @@ mod output;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use musicum_core::config::{self, LibraryPaths};
+use musicum_core::config::{self, Config};
 
 #[derive(Parser)]
 #[command(
@@ -12,9 +12,9 @@ use musicum_core::config::{self, LibraryPaths};
     version
 )]
 struct Cli {
-    /// Override the library directory for this invocation
+    /// Path to a config file (overrides the default ~/.musicum/config.toml)
     #[arg(long, global = true)]
-    library: Option<String>,
+    config: Option<std::path::PathBuf>,
 
     #[command(subcommand)]
     command: Commands,
@@ -82,29 +82,25 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let paths = if let Some(lib) = cli.library {
-        LibraryPaths::from_override(&lib)
-    } else {
-        config::load()?.library_paths()
-    };
+    config::init(cli.config);
 
     if let Commands::Config = cli.command {
-        println!("Config file:   {}", config::config_path().display());
-        println!("Library dir:   {}", paths.library_dir.display());
-        println!("Files dir:     {}", paths.files_dir.display());
-        println!("Catalog dir:   {}", paths.catalog_dir.display());
-        println!("Generated dir: {}", paths.generated_dir.display());
+        let cfg = Config::get();
+        println!("Config file:   {}", config::default_config_path().display());
+        println!("Files dir:     {}", cfg.library.files_dir.display());
+        println!("Catalog dir:   {}", cfg.library.catalog_dir.display());
+        println!("Generated dir: {}", cfg.library.generated_dir.display());
         return Ok(());
     }
 
-    let db = musicum_core::db::connect(&paths.catalog_dir).await?;
+    let db = musicum_core::db::connect(&Config::get().library.catalog_dir).await?;
 
     match cli.command {
-        Commands::Sync { force }    => commands::sync::run(&db, &paths, force).await?,
-        Commands::Files(args)       => commands::files::run(&db, &paths.files_dir, args).await?,
+        Commands::Sync { force }    => commands::sync::run(&db, force).await?,
+        Commands::Files(args)       => commands::files::run(&db, args).await?,
         Commands::Clips(args)       => commands::clips::run(&db, args).await?,
         Commands::Collections(args) => commands::collections::run(&db, args).await?,
-        Commands::Presets(args)     => commands::presets::run(&db, &paths.catalog_dir, args).await?,
+        Commands::Presets(args)     => commands::presets::run(&db, args).await?,
         Commands::Processors(args)  => commands::processors::run(args),
         Commands::Play { target, collection, file, clip, loop_mode } => {
             commands::play::run(&db, target, collection, file, clip, loop_mode).await?

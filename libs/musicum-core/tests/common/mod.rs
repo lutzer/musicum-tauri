@@ -23,19 +23,14 @@ pub fn write_sine_wav(path: &Path, duration_secs: f32) -> PathBuf {
     path.to_path_buf()
 }
 
-pub fn make_paths(base: &std::path::Path) -> musicum_core::config::LibraryPaths {
+pub fn make_paths(base: &std::path::Path) -> musicum_core::config::LibraryConfig {
     let files_dir     = base.join("files");
     let catalog_dir   = base.join("catalog");
     let generated_dir = base.join(".generated");
     std::fs::create_dir_all(&files_dir).unwrap();
     std::fs::create_dir_all(&catalog_dir).unwrap();
     std::fs::create_dir_all(&generated_dir).unwrap();
-    musicum_core::config::LibraryPaths {
-        library_dir:   base.to_path_buf(),
-        files_dir,
-        catalog_dir,
-        generated_dir,
-    }
+    musicum_core::config::LibraryConfig { files_dir, catalog_dir, generated_dir }
 }
 
 /// Write a stereo WAV with white noise at `path` (16-bit PCM, 48000 Hz).

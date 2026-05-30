@@ -5,7 +5,7 @@ use musicum_core::db::entities::{clip, file};
 use sea_orm::{EntityTrait, PaginatorTrait};
 use tempfile::tempdir;
 
-async fn setup(paths: &musicum_core::config::LibraryPaths) -> sea_orm::DatabaseConnection {
+async fn setup(paths: &musicum_core::config::LibraryConfig) -> sea_orm::DatabaseConnection {
     db::connect(&paths.catalog_dir).await.unwrap()
 }
 
@@ -17,7 +17,7 @@ async fn sync_discovers_wav_file() {
     common::write_sine_wav(&wav, 0.5);
 
     let db = setup(&paths).await;
-    let stats = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    let stats = sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
 
     assert_eq!(stats.files_added.len(), 1, "should have found one new file");
     assert!(stats.files_removed.is_empty());
@@ -38,9 +38,9 @@ async fn sync_creates_sidecar_next_to_audio() {
     common::write_stereo_wav(&wav, 1.0);
 
     let db = setup(&paths).await;
-    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
 
-    let sidecar_path = paths.files_dir.join("pad.wav.musicum.json");
+    let sidecar_path = paths.files_dir.join(".pad.wav.musicum.json");
     assert!(sidecar_path.exists(), "sidecar should be created next to audio file");
 
     let sc = sidecar::read_file_sidecar(&wav).unwrap();
@@ -78,7 +78,7 @@ async fn sync_reads_existing_sidecar_with_clips() {
     std::fs::write(&sidecar_path, serde_json::to_string_pretty(&sc).unwrap()).unwrap();
 
     let db = setup(&paths).await;
-    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
 
     let files = file::Entity::find().all(&db).await.unwrap();
     assert_eq!(files.len(), 1);
@@ -105,10 +105,10 @@ async fn sync_idempotent_on_unchanged_file() {
 
     let db = setup(&paths).await;
 
-    let s1 = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    let s1 = sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
     assert_eq!(s1.files_added.len(), 1);
 
-    let s2 = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    let s2 = sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
     assert!(s2.files_added.is_empty(), "no new files on second sync");
     assert!(s2.files_updated.is_empty());
     assert!(s2.files_removed.is_empty());
@@ -124,7 +124,7 @@ async fn sync_detects_removed_files() {
     common::write_sine_wav(&wav, 0.3);
 
     let db = setup(&paths).await;
-    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
     assert_eq!(file::Entity::find().count(&db).await.unwrap(), 1);
 
     // Remove both audio and sidecar to simulate a full deletion (no orphan).
@@ -132,7 +132,7 @@ async fn sync_detects_removed_files() {
     let sc = sidecar::sidecar_path_for_audio(&wav);
     if sc.exists() { std::fs::remove_file(&sc).unwrap(); }
 
-    let s2 = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    let s2 = sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
     assert_eq!(s2.files_removed.len(), 1);
     assert_eq!(file::Entity::find().count(&db).await.unwrap(), 0);
 }
@@ -145,14 +145,14 @@ async fn sync_orphans_sidecar_when_only_audio_removed() {
     common::write_sine_wav(&wav, 0.3);
 
     let db = setup(&paths).await;
-    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
     assert_eq!(file::Entity::find().count(&db).await.unwrap(), 1);
 
     // Remove only the audio file; sidecar stays behind.
     std::fs::remove_file(&wav).unwrap();
     assert!(sidecar::sidecar_path_for_audio(&wav).exists());
 
-    let s2 = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    let s2 = sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
     assert_eq!(s2.files_removed.len(), 0, "should not auto-remove when sidecar remains");
     assert_eq!(s2.orphaned_sidecars.len(), 1, "should report the orphaned sidecar");
     // DB record preserved — user must confirm removal.
@@ -169,7 +169,7 @@ async fn sync_walks_subdirectories() {
     common::write_sine_wav(&paths.files_dir.join("pad.wav"), 1.0);
 
     let db = setup(&paths).await;
-    let stats = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    let stats = sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
 
     assert_eq!(stats.files_added.len(), 3, "should find files in subdirectories too");
 }
@@ -185,7 +185,7 @@ async fn sync_picks_up_sidecar_metadata_after_audio_touch() {
     common::write_sine_wav(&wav, 1.0);
 
     let db = setup(&paths).await;
-    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
 
     let sidecar_path = sidecar::sidecar_path_for_audio(&wav);
     let mut sc = sidecar::read_file_sidecar(&wav).unwrap();
@@ -197,7 +197,7 @@ async fn sync_picks_up_sidecar_metadata_after_audio_touch() {
     let wav_bytes = std::fs::read(&wav).unwrap();
     std::fs::write(&wav, &wav_bytes).unwrap();
 
-    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
 
     let files = musicum_core::db::entities::file::Entity::find()
         .all(&db).await.unwrap();
@@ -215,7 +215,7 @@ async fn report_tracks_sidecar_metadata_update() {
     common::write_sine_wav(&wav, 1.0);
 
     let db = setup(&paths).await;
-    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
 
     let mut sc = sidecar::read_file_sidecar(&wav).unwrap();
     sc.metadata.bpm = Some(140.0);
@@ -226,7 +226,7 @@ async fn report_tracks_sidecar_metadata_update() {
     let wav_bytes = std::fs::read(&wav).unwrap();
     std::fs::write(&wav, &wav_bytes).unwrap();
 
-    let report = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    let report = sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
 
     assert_eq!(report.sidecars_updated, vec!["bass"]);
     assert!(report.files_added.is_empty());
@@ -241,9 +241,9 @@ async fn report_sidecar_unchanged_is_silent() {
     common::write_sine_wav(&wav, 1.0);
 
     let db = setup(&paths).await;
-    sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
 
-    let report = sync_service::sync_library(&db, &paths, || ()).await.unwrap();
+    let report = sync_service::sync_library(&db, &paths.files_dir, || ()).await.unwrap();
 
     assert!(report.sidecars_updated.is_empty());
     assert!(report.files_added.is_empty());

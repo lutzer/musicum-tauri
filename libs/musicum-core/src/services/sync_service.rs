@@ -39,10 +39,9 @@ pub struct SyncReport {
 
 pub async fn sync_library(
     db: &DatabaseConnection,
-    paths: &crate::config::LibraryPaths,
+    files_dir: &std::path::Path,
     on_progress: impl Fn(),
 ) -> Result<SyncReport, ServiceError> {
-    let lib_path = &paths.files_dir;
     let mut report = SyncReport::default();
 
     // Pre-load all DB records to avoid per-file queries.
@@ -60,7 +59,7 @@ pub async fn sync_library(
     // New audio files with no sidecar — deferred for the repair pass.
     let mut pending_new: Vec<PendingNew> = Vec::new();
 
-    for entry in WalkDir::new(lib_path)
+    for entry in WalkDir::new(files_dir)
         .follow_links(false)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -303,20 +302,10 @@ pub async fn remove_orphaned_sidecar(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LibraryPaths;
     use crate::db::test_db;
     use sea_orm::ActiveModelTrait;
     use sea_orm::ActiveValue::Set;
     use tempfile::tempdir;
-
-    fn make_paths(dir: &std::path::Path) -> LibraryPaths {
-        LibraryPaths {
-            library_dir:   dir.to_path_buf(),
-            files_dir:     dir.to_path_buf(),
-            catalog_dir:   dir.join("catalog"),
-            generated_dir: dir.join("catalog/generated"),
-        }
-    }
 
     fn write_wav(path: &std::path::Path) {
         let spec = hound::WavSpec {
@@ -400,8 +389,7 @@ mod tests {
         let new_sidecar = crate::sidecar::sidecar_path_for_audio(&new_audio);
         assert!(!new_sidecar.exists());
 
-        let paths  = make_paths(dir.path());
-        let report = sync_library(&db, &paths, || {}).await.unwrap();
+        let report = sync_library(&db, dir.path(), || {}).await.unwrap();
 
         assert_eq!(report.files_repaired.len(), 1, "should report one repaired file");
         assert!(report.files_added.is_empty(),   "repaired file must not appear as added");
@@ -431,8 +419,7 @@ mod tests {
         write_sidecar(&old_audio, uuid);
         assert!(!old_audio.exists());
 
-        let paths  = make_paths(dir.path());
-        let report = sync_library(&db, &paths, || {}).await.unwrap();
+        let report = sync_library(&db, dir.path(), || {}).await.unwrap();
 
         assert_eq!(report.orphaned_sidecars.len(), 1);
         assert_eq!(report.orphaned_sidecars[0].name, "lost");
@@ -479,8 +466,7 @@ mod tests {
         let audio = dir.path().join("brand-new.wav");
         write_wav(&audio);
 
-        let paths  = make_paths(dir.path());
-        let report = sync_library(&db, &paths, || {}).await.unwrap();
+        let report = sync_library(&db, dir.path(), || {}).await.unwrap();
 
         assert_eq!(report.files_added.len(), 1);
         assert!(report.files_repaired.is_empty());
